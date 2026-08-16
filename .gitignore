@@ -1,0 +1,52 @@
+# Archivos generados por el sistema
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Output — archivos Excel y PDF generados por el scraper
+output/
+*.xlsx
+*.pdf
+
+# Logs de la app
+app.log
+*.log
+
+# Entorno virtual Python
+venv/
+env/
+.venv/
+ENV/
+
+# Variables de entorno / secretos
+.env
+.env.*
+secrets.txt
+
+# Videos (demasiado pesados para GitHub)
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# Archivos de Windows
+Thumbs.db
+desktop.ini
+*.lnk
+
+# Archivos temporales
+*.tmp
+*.bak
+~$*
+
+# VS Code / IDEs
+.vscode/
+.idea/
+*.code-workspace
+
+# Playwright
+playwright-report/
+test-results/

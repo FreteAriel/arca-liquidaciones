@@ -1,0 +1,868 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Liquidaciones — ARCA + ARBA</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: #f0f4f8;
+      min-height: 100vh;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 30px 16px;
+    }
+
+    .container {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.10);
+      width: 100%;
+      max-width: 780px;
+      overflow: hidden;
+    }
+
+    /* ── Header ── */
+    .header {
+      background: linear-gradient(135deg, #1a3a6b 0%, #2d6a4f 100%);
+      color: #fff;
+      padding: 22px 32px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .header h1 { font-size: 1.35rem; font-weight: 700; }
+    .header p  { font-size: 0.83rem; opacity: 0.85; margin-top: 4px; }
+    .btn-back {
+      background: rgba(255,255,255,0.18);
+      color: #fff;
+      border: 1.5px solid rgba(255,255,255,0.4);
+      border-radius: 7px;
+      padding: 7px 16px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .btn-back:hover { background: rgba(255,255,255,0.28); }
+
+    /* ── Tabs ── */
+    .tabs {
+      display: flex;
+      border-bottom: 2px solid #e8eef4;
+      background: #f8fafc;
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 14px 10px;
+      border: none;
+      background: none;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #666;
+      cursor: pointer;
+      border-bottom: 3px solid transparent;
+      margin-bottom: -2px;
+      transition: color 0.2s, border-color 0.2s;
+    }
+    .tab-btn.active {
+      color: #1a3a6b;
+      border-bottom-color: #2563eb;
+    }
+    .tab-btn:hover:not(.active) { color: #333; }
+
+    /* ── Tab panels ── */
+    .tab-panel { display: none; padding: 24px 32px; }
+    .tab-panel.active { display: block; }
+
+    /* ── Form elements ── */
+    .section-title {
+      font-size: 0.76rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #555;
+      margin-bottom: 12px;
+      padding-bottom: 5px;
+      border-bottom: 2px solid #e8eef4;
+    }
+
+    .row { display: flex; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; }
+    .col { flex: 1; min-width: 140px; }
+    .col.w33 { flex: 0 0 calc(33.33% - 10px); }
+    .col.w50 { flex: 0 0 calc(50% - 7px); }
+    .col.full { flex: 0 0 100%; }
+
+    label {
+      display: block;
+      font-size: 0.80rem;
+      font-weight: 600;
+      color: #444;
+      margin-bottom: 4px;
+    }
+
+    input, select {
+      width: 100%;
+      padding: 8px 11px;
+      border: 1.5px solid #cdd5e0;
+      border-radius: 7px;
+      font-size: 0.88rem;
+      color: #333;
+      background: #fafbfc;
+      transition: border-color 0.2s;
+    }
+    input:focus, select:focus {
+      outline: none;
+      border-color: #2563eb;
+      background: #fff;
+    }
+    input[type="password"] { letter-spacing: 2px; }
+
+    .hint {
+      font-size: 0.72rem;
+      color: #888;
+      margin-top: 3px;
+    }
+
+    .separator {
+      border: none;
+      border-top: 1px solid #e8eef4;
+      margin: 18px 0;
+    }
+
+    /* Subgrupo de campos con fondo levemente distinto */
+    .field-group {
+      background: #f8fafc;
+      border: 1px solid #e8eef4;
+      border-radius: 8px;
+      padding: 14px 16px;
+      margin-bottom: 14px;
+    }
+    .field-group-title {
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: #2563eb;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-bottom: 12px;
+    }
+
+    /* Actividades dinámicas */
+    .act-row {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 8px;
+      align-items: center;
+    }
+    .act-row input { flex: 1; }
+    .btn-remove-act {
+      background: #fee2e2;
+      border: none;
+      color: #b91c1c;
+      border-radius: 6px;
+      width: 30px;
+      height: 30px;
+      font-size: 1rem;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .btn-add-act {
+      background: #eff6ff;
+      border: 1.5px dashed #93c5fd;
+      color: #2563eb;
+      border-radius: 7px;
+      padding: 7px 14px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 4px;
+    }
+    .btn-add-act:hover { background: #dbeafe; }
+
+    /* Botones principales */
+    .btn-primary {
+      width: 100%;
+      padding: 13px;
+      background: linear-gradient(135deg, #1a3a6b, #2563eb);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      margin-top: 8px;
+      transition: opacity 0.2s;
+    }
+    .btn-primary:hover { opacity: 0.9; }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .btn-download {
+      display: none;
+      width: 100%;
+      padding: 13px;
+      background: linear-gradient(135deg, #2d6a4f, #40916c);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      margin-top: 10px;
+      text-align: center;
+      text-decoration: none;
+    }
+    .btn-download:hover { opacity: 0.9; }
+
+    /* Progress */
+    .progress-section { display: none; margin-top: 18px; }
+    .progress-bar-bg {
+      background: #e8eef4;
+      border-radius: 99px;
+      height: 10px;
+      overflow: hidden;
+      margin-bottom: 12px;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #2563eb, #2d6a4f);
+      border-radius: 99px;
+      transition: width 0.5s ease;
+      width: 0%;
+    }
+    .progress-pct { font-size: 0.80rem; font-weight: 700; color: #2563eb; text-align: right; margin-bottom: 8px; }
+
+    .log-box {
+      background: #1e2329;
+      color: #a8d8a8;
+      border-radius: 8px;
+      padding: 12px 14px;
+      font-family: 'Courier New', monospace;
+      font-size: 0.76rem;
+      max-height: 220px;
+      overflow-y: auto;
+      line-height: 1.6;
+    }
+    .log-box .log-err  { color: #ff7979; }
+    .log-box .log-ok   { color: #68d391; }
+    .log-box .log-info { color: #90cdf4; }
+
+    .status-badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 99px;
+      font-size: 0.74rem;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .badge-procesando { background: #ebf8ff; color: #2563eb; }
+    .badge-completado { background: #f0fff4; color: #276749; }
+    .badge-error      { background: #fff5f5; color: #c53030; }
+
+    .alert-warning {
+      background: #fffbeb;
+      border-left: 4px solid #f59e0b;
+      color: #92400e;
+      padding: 9px 13px;
+      border-radius: 6px;
+      font-size: 0.82rem;
+      margin-bottom: 16px;
+    }
+
+    .total-preview {
+      background: #f0f9ff;
+      border: 1.5px solid #bae6fd;
+      border-radius: 7px;
+      padding: 10px 14px;
+      margin-top: 4px;
+      font-size: 0.82rem;
+      color: #0369a1;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <div class="header">
+    <div>
+      <h1>📑 Liquidaciones Impositivas</h1>
+      <p>IIBB Local (ARBA) · Convenio Multilateral (SIFERE) · IVA (ARCA)</p>
+    </div>
+    <a href="/" class="btn-back">← Libros IVA</a>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab-btn active" onclick="showTab('iibb', this)">🏛️ IIBB Local</button>
+    <button class="tab-btn"        onclick="showTab('com',  this)">🗺️ Conv. Multilateral</button>
+    <button class="tab-btn"        onclick="showTab('iva',  this)">🧾 IVA</button>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════
+       TAB 1 · IIBB LOCAL — ARBA
+  ══════════════════════════════════════════════════════ -->
+  <div id="tab-iibb" class="tab-panel active">
+    <div class="alert-warning">⚠️ Se abrirá un navegador en ARBA. No lo cierres mientras se procesa.</div>
+
+    <form id="form-iibb" onsubmit="iniciarLiquidacion(event,'iibb')">
+
+      <div class="section-title">Credenciales</div>
+      <div class="row">
+        <div class="col w50">
+          <label>CUIT</label>
+          <input type="text" id="iibb-cuit" class="cuit-input" placeholder="20-12345678-9" maxlength="13" required />
+        </div>
+        <div class="col w50">
+          <label>Clave ARBA</label>
+          <input type="password" id="iibb-password" placeholder="••••••••" required />
+        </div>
+      </div>
+
+      <hr class="separator" />
+      <div class="section-title">Período</div>
+      <div class="row">
+        <div class="col w50">
+          <label>Mes</label>
+          <select id="iibb-mes">
+            <option value="1">Enero</option><option value="2">Febrero</option>
+            <option value="3">Marzo</option><option value="4">Abril</option>
+            <option value="5">Mayo</option><option value="6">Junio</option>
+            <option value="7">Julio</option><option value="8">Agosto</option>
+            <option value="9">Septiembre</option><option value="10">Octubre</option>
+            <option value="11">Noviembre</option><option value="12">Diciembre</option>
+          </select>
+        </div>
+        <div class="col w50">
+          <label>Año</label>
+          <input type="number" id="iibb-anio" min="2020" max="2035" value="2026" />
+        </div>
+      </div>
+
+      <hr class="separator" />
+      <div class="section-title">Actividades — Base Imponible</div>
+      <p class="hint" style="margin-bottom:12px;">
+        Ingresá la base imponible gravada para cada actividad de la DJ. El código es opcional (referencia).
+      </p>
+      <div id="iibb-actividades">
+        <div class="act-row">
+          <input type="text"   placeholder="Código (ej: 477320)" style="max-width:160px;" class="iibb-cod" />
+          <input type="text"   placeholder="Base imponible $" class="iibb-monto" required />
+          <button type="button" class="btn-remove-act" onclick="removeActRow(this)" title="Eliminar">×</button>
+        </div>
+      </div>
+      <button type="button" class="btn-add-act" onclick="addActRow()">+ Agregar actividad</button>
+
+      <hr class="separator" />
+      <div class="section-title">Saldo a Favor Anterior</div>
+      <div class="row">
+        <div class="col">
+          <label>Saldo acumulado a favor períodos anteriores IIBB ($)</label>
+          <input type="text" id="iibb-saldo-anterior" placeholder="0,00" value="0" />
+          <div class="hint">Ingresá 0 si no hay saldo a favor acumulado</div>
+        </div>
+      </div>
+
+      <button type="submit" class="btn-primary" id="btn-iibb">▶ Liquidar IIBB Local</button>
+    </form>
+
+    <div class="progress-section" id="prog-iibb">
+      <div id="badge-iibb" class="status-badge badge-procesando">⏳ Procesando...</div>
+      <div class="progress-pct"><span id="pct-iibb">0%</span></div>
+      <div class="progress-bar-bg"><div class="progress-bar-fill" id="fill-iibb"></div></div>
+      <div class="log-box" id="log-iibb"></div>
+      <a id="dl-iibb" class="btn-download" href="#">⬇ Descargar Comprobante DJ</a>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════
+       TAB 2 · CONVENIO MULTILATERAL — SIFERE
+  ══════════════════════════════════════════════════════ -->
+  <div id="tab-com" class="tab-panel">
+    <div class="alert-warning">⚠️ Se abrirá un navegador en ARCA → SIFERE (Convenio Multilateral). No lo cierres mientras se procesa.</div>
+
+    <form id="form-com" onsubmit="iniciarLiquidacion(event,'com')">
+
+      <div class="section-title">Credenciales ARCA (Clave Fiscal)</div>
+      <div class="row">
+        <div class="col w50">
+          <label>CUIT</label>
+          <input type="text" id="com-cuit" class="cuit-input" placeholder="20-12345678-9" maxlength="13" required />
+        </div>
+        <div class="col w50">
+          <label>Clave Fiscal ARCA</label>
+          <input type="password" id="com-password" placeholder="••••••••" required />
+          <div class="hint">La misma que usás en AFIP / ARCA</div>
+        </div>
+      </div>
+
+      <hr class="separator" />
+      <div class="section-title">Período</div>
+      <div class="row">
+        <div class="col w50">
+          <label>Mes</label>
+          <select id="com-mes">
+            <option value="1">Enero</option><option value="2">Febrero</option>
+            <option value="3">Marzo</option><option value="4">Abril</option>
+            <option value="5">Mayo</option><option value="6">Junio</option>
+            <option value="7">Julio</option><option value="8">Agosto</option>
+            <option value="9">Septiembre</option><option value="10">Octubre</option>
+            <option value="11">Noviembre</option><option value="12">Diciembre</option>
+          </select>
+        </div>
+        <div class="col w50">
+          <label>Año</label>
+          <input type="number" id="com-anio" min="2020" max="2035" value="2026" />
+        </div>
+      </div>
+
+      <hr class="separator" />
+      <div class="section-title">Base Imponible por Jurisdicción</div>
+      <div class="row">
+        <div class="col w50">
+          <label>🏙️ CABA — Base imponible ($)</label>
+          <input type="text" id="com-base-caba" placeholder="0,00" value="0" required />
+          <div class="hint">Ingresos gravados de CABA (Jurisdicción 901)</div>
+        </div>
+        <div class="col w50">
+          <label>🌾 Buenos Aires — Base imponible ($)</label>
+          <input type="text" id="com-base-bsas" placeholder="0,00" value="0" required />
+          <div class="hint">Ingresos gravados de Bs. As. (Jurisdicción 902)</div>
+        </div>
+      </div>
+      <div class="total-preview" id="com-total-preview">Total: $ 0,00</div>
+
+      <button type="submit" class="btn-primary" id="btn-com">▶ Liquidar Convenio Multilateral y generar VEP</button>
+    </form>
+
+    <div class="progress-section" id="prog-com">
+      <div id="badge-com" class="status-badge badge-procesando">⏳ Procesando...</div>
+      <div class="progress-pct"><span id="pct-com">0%</span></div>
+      <div class="progress-bar-bg"><div class="progress-bar-fill" id="fill-com"></div></div>
+      <div class="log-box" id="log-com"></div>
+      <a id="dl-com" class="btn-download" href="#">⬇ Descargar VEP (Convenio Multilateral)</a>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════
+       TAB 3 · IVA — ARCA
+  ══════════════════════════════════════════════════════ -->
+  <div id="tab-iva" class="tab-panel">
+    <div class="alert-warning">⚠️ Se abrirá un navegador en ARCA para presentar la DJ IVA. No lo cierres mientras se procesa.</div>
+
+    <form id="form-iva" onsubmit="iniciarLiquidacion(event,'iva')">
+
+      <div class="section-title">Credenciales ARCA (Clave Fiscal)</div>
+      <div class="row">
+        <div class="col w50">
+          <label>CUIT</label>
+          <input type="text" id="iva-cuit" class="cuit-input" placeholder="20-12345678-9" maxlength="13" required />
+        </div>
+        <div class="col w50">
+          <label>Clave Fiscal ARCA</label>
+          <input type="password" id="iva-password" placeholder="••••••••" required />
+        </div>
+      </div>
+
+      <hr class="separator" />
+      <div class="section-title">Período</div>
+      <div class="row">
+        <div class="col w50">
+          <label>Mes</label>
+          <select id="iva-mes">
+            <option value="1">Enero</option><option value="2">Febrero</option>
+            <option value="3">Marzo</option><option value="4">Abril</option>
+            <option value="5">Mayo</option><option value="6">Junio</option>
+            <option value="7">Julio</option><option value="8">Agosto</option>
+            <option value="9">Septiembre</option><option value="10">Octubre</option>
+            <option value="11">Noviembre</option><option value="12">Diciembre</option>
+          </select>
+        </div>
+        <div class="col w50">
+          <label>Año</label>
+          <input type="number" id="iva-anio" min="2020" max="2035" value="2026" />
+        </div>
+      </div>
+
+      <hr class="separator" />
+
+      <!-- VENTAS A CONSUMIDOR FINAL -->
+      <div class="field-group">
+        <div class="field-group-title">🛍️ Ventas a Consumidor Final</div>
+        <div class="row">
+          <div class="col w50">
+            <label>Neto gravado al 21% ($)</label>
+            <input type="text" id="iva-vcf-neto21" placeholder="0,00" value="0" />
+          </div>
+          <div class="col w50">
+            <label>IVA al 21% ($)</label>
+            <input type="text" id="iva-vcf-iva21" placeholder="0,00" value="0" />
+            <div class="hint">= Neto × 0.21</div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="col w50">
+            <label>Neto gravado al 10,5% ($)</label>
+            <input type="text" id="iva-vcf-neto105" placeholder="0,00" value="0" />
+          </div>
+          <div class="col w50">
+            <label>IVA al 10,5% ($)</label>
+            <input type="text" id="iva-vcf-iva105" placeholder="0,00" value="0" />
+            <div class="hint">= Neto × 0.105</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- VENTAS A RESPONSABLE INSCRIPTO -->
+      <div class="field-group">
+        <div class="field-group-title">🏢 Ventas a Responsable Inscripto</div>
+        <div class="row">
+          <div class="col w50">
+            <label>Neto gravado al 21% ($)</label>
+            <input type="text" id="iva-vri-neto21" placeholder="0,00" value="0" />
+          </div>
+          <div class="col w50">
+            <label>IVA al 21% ($)</label>
+            <input type="text" id="iva-vri-iva21" placeholder="0,00" value="0" />
+          </div>
+        </div>
+        <div class="row">
+          <div class="col w50">
+            <label>Neto gravado al 10,5% ($)</label>
+            <input type="text" id="iva-vri-neto105" placeholder="0,00" value="0" />
+          </div>
+          <div class="col w50">
+            <label>IVA al 10,5% ($)</label>
+            <input type="text" id="iva-vri-iva105" placeholder="0,00" value="0" />
+          </div>
+        </div>
+      </div>
+
+      <!-- COMPRAS -->
+      <div class="field-group">
+        <div class="field-group-title">🛒 Compras / Crédito Fiscal</div>
+        <div class="row">
+          <div class="col w50">
+            <label>Neto al 21% ($)</label>
+            <input type="text" id="iva-cmp-neto21" placeholder="0,00" value="0" />
+          </div>
+          <div class="col w50">
+            <label>IVA al 21% ($)</label>
+            <input type="text" id="iva-cmp-iva21" placeholder="0,00" value="0" />
+          </div>
+        </div>
+        <div class="row">
+          <div class="col w50">
+            <label>Neto al 10,5% ($)</label>
+            <input type="text" id="iva-cmp-neto105" placeholder="0,00" value="0" />
+          </div>
+          <div class="col w50">
+            <label>IVA al 10,5% ($)</label>
+            <input type="text" id="iva-cmp-iva105" placeholder="0,00" value="0" />
+          </div>
+        </div>
+      </div>
+
+      <!-- RETENCIONES Y SALDOS ANTERIORES -->
+      <div class="section-title">Retenciones y Saldos Anteriores</div>
+      <div class="row">
+        <div class="col w33">
+          <label>Retenciones sufridas ($)</label>
+          <input type="text" id="iva-retenciones" placeholder="0,00" value="0" />
+          <div class="hint">SICORE y otras retenciones</div>
+        </div>
+        <div class="col w33">
+          <label>Saldo a favor 1° párrafo ($)</label>
+          <input type="text" id="iva-saldo1p" placeholder="0,00" value="0" />
+          <div class="hint">Saldo técnico período anterior</div>
+        </div>
+        <div class="col w33">
+          <label>Saldo a favor 2° párrafo ($)</label>
+          <input type="text" id="iva-saldo2p" placeholder="0,00" value="0" />
+          <div class="hint">Libre disponibilidad período anterior</div>
+        </div>
+      </div>
+
+      <!-- Resumen en tiempo real -->
+      <div class="total-preview" id="iva-resumen">
+        Débito fiscal: $0,00 &nbsp;|&nbsp; Crédito fiscal: $0,00 &nbsp;|&nbsp; Posición estimada: $0,00
+      </div>
+
+      <button type="submit" class="btn-primary" id="btn-iva">▶ Liquidar IVA y generar VEP</button>
+    </form>
+
+    <div class="progress-section" id="prog-iva">
+      <div id="badge-iva" class="status-badge badge-procesando">⏳ Procesando...</div>
+      <div class="progress-pct"><span id="pct-iva">0%</span></div>
+      <div class="progress-bar-bg"><div class="progress-bar-fill" id="fill-iva"></div></div>
+      <div class="log-box" id="log-iva"></div>
+      <a id="dl-iva" class="btn-download" href="#">⬇ Descargar VEP (IVA)</a>
+    </div>
+  </div>
+
+</div><!-- /container -->
+
+<script>
+// ───────────────────────────────────────────────────────
+// Tabs
+// ───────────────────────────────────────────────────────
+function showTab(id, btn) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + id).classList.add('active');
+  btn.classList.add('active');
+}
+
+// ───────────────────────────────────────────────────────
+// CUIT formatter
+// ───────────────────────────────────────────────────────
+document.querySelectorAll('.cuit-input').forEach(el => {
+  el.addEventListener('input', function() {
+    let v = this.value.replace(/[^0-9]/g,'');
+    if (v.length > 2)  v = v.slice(0,2)  + '-' + v.slice(2);
+    if (v.length > 11) v = v.slice(0,11) + '-' + v.slice(11);
+    this.value = v;
+  });
+});
+
+// ───────────────────────────────────────────────────────
+// Actividades dinámicas (IIBB)
+// ───────────────────────────────────────────────────────
+function addActRow() {
+  const container = document.getElementById('iibb-actividades');
+  const div = document.createElement('div');
+  div.className = 'act-row';
+  div.innerHTML = `
+    <input type="text" placeholder="Código (ej: 477450)" style="max-width:160px;" class="iibb-cod" />
+    <input type="text" placeholder="Base imponible $" class="iibb-monto" />
+    <button type="button" class="btn-remove-act" onclick="removeActRow(this)" title="Eliminar">×</button>
+  `;
+  container.appendChild(div);
+}
+
+function removeActRow(btn) {
+  const rows = document.querySelectorAll('#iibb-actividades .act-row');
+  if (rows.length > 1) btn.closest('.act-row').remove();
+}
+
+// ───────────────────────────────────────────────────────
+// COM — preview total
+// ───────────────────────────────────────────────────────
+['com-base-caba','com-base-bsas'].forEach(id => {
+  document.getElementById(id).addEventListener('input', actualizarTotalCOM);
+});
+function actualizarTotalCOM() {
+  const caba = parseMonto(document.getElementById('com-base-caba').value);
+  const bsas = parseMonto(document.getElementById('com-base-bsas').value);
+  document.getElementById('com-total-preview').textContent =
+    'Total base imponible: $ ' + formatMonto(caba + bsas);
+}
+
+// ───────────────────────────────────────────────────────
+// IVA — resumen en tiempo real
+// ───────────────────────────────────────────────────────
+const ivaFields = [
+  'iva-vcf-neto21','iva-vcf-iva21','iva-vcf-neto105','iva-vcf-iva105',
+  'iva-vri-neto21','iva-vri-iva21','iva-vri-neto105','iva-vri-iva105',
+  'iva-cmp-neto21','iva-cmp-iva21','iva-cmp-neto105','iva-cmp-iva105',
+  'iva-retenciones','iva-saldo1p','iva-saldo2p',
+];
+ivaFields.forEach(id => {
+  document.getElementById(id).addEventListener('input', actualizarResumenIVA);
+});
+function actualizarResumenIVA() {
+  const debito = parseMonto(document.getElementById('iva-vcf-iva21').value)
+               + parseMonto(document.getElementById('iva-vcf-iva105').value)
+               + parseMonto(document.getElementById('iva-vri-iva21').value)
+               + parseMonto(document.getElementById('iva-vri-iva105').value);
+  const credito = parseMonto(document.getElementById('iva-cmp-iva21').value)
+                + parseMonto(document.getElementById('iva-cmp-iva105').value)
+                + parseMonto(document.getElementById('iva-retenciones').value)
+                + parseMonto(document.getElementById('iva-saldo1p').value)
+                + parseMonto(document.getElementById('iva-saldo2p').value);
+  const posicion = debito - credito;
+  const signo = posicion >= 0 ? 'A PAGAR' : 'A FAVOR';
+  document.getElementById('iva-resumen').innerHTML =
+    `Débito fiscal: $${formatMonto(debito)} &nbsp;|&nbsp; ` +
+    `Crédito fiscal: $${formatMonto(credito)} &nbsp;|&nbsp; ` +
+    `<strong>Posición estimada: ${signo} $${formatMonto(Math.abs(posicion))}</strong>`;
+}
+
+// ───────────────────────────────────────────────────────
+// Helpers de formato
+// ───────────────────────────────────────────────────────
+function parseMonto(s) {
+  if (!s) return 0;
+  return parseFloat(s.replace(/\./g,'').replace(',','.')) || 0;
+}
+function formatMonto(n) {
+  return n.toLocaleString('es-AR', {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+
+// ───────────────────────────────────────────────────────
+// Envío de formularios
+// ───────────────────────────────────────────────────────
+const sessions = { iibb: null, com: null, iva: null };
+const pollings  = { iibb: null, com: null, iva: null };
+const logCounts = { iibb: 0,    com: 0,    iva: 0    };
+
+async function iniciarLiquidacion(e, tipo) {
+  e.preventDefault();
+  const btn = document.getElementById('btn-' + tipo);
+  btn.disabled = true;
+  btn.textContent = '⏳ Iniciando...';
+
+  document.getElementById('prog-' + tipo).style.display = 'block';
+  document.getElementById('log-'  + tipo).innerHTML     = '';
+  logCounts[tipo] = 0;
+
+  let payload = {};
+
+  if (tipo === 'iibb') {
+    const actividades = [];
+    document.querySelectorAll('#iibb-actividades .act-row').forEach(row => {
+      const cod   = row.querySelector('.iibb-cod').value.trim();
+      const monto = parseMonto(row.querySelector('.iibb-monto').value);
+      if (monto > 0) actividades.push({ codigo: cod, monto });
+    });
+    payload = {
+      cuit:              document.getElementById('iibb-cuit').value,
+      password_arba:     document.getElementById('iibb-password').value,
+      mes:               document.getElementById('iibb-mes').value,
+      anio:              document.getElementById('iibb-anio').value,
+      actividades,
+      saldo_favor_anterior: parseMonto(document.getElementById('iibb-saldo-anterior').value),
+    };
+  } else if (tipo === 'com') {
+    payload = {
+      cuit:       document.getElementById('com-cuit').value,
+      password:   document.getElementById('com-password').value,
+      mes:        document.getElementById('com-mes').value,
+      anio:       document.getElementById('com-anio').value,
+      base_caba:  parseMonto(document.getElementById('com-base-caba').value),
+      base_bsas:  parseMonto(document.getElementById('com-base-bsas').value),
+    };
+  } else if (tipo === 'iva') {
+    payload = {
+      cuit:             document.getElementById('iva-cuit').value,
+      password:         document.getElementById('iva-password').value,
+      mes:              document.getElementById('iva-mes').value,
+      anio:             document.getElementById('iva-anio').value,
+      vta_cf_neto_21:   parseMonto(document.getElementById('iva-vcf-neto21').value),
+      vta_cf_iva_21:    parseMonto(document.getElementById('iva-vcf-iva21').value),
+      vta_cf_neto_105:  parseMonto(document.getElementById('iva-vcf-neto105').value),
+      vta_cf_iva_105:   parseMonto(document.getElementById('iva-vcf-iva105').value),
+      vta_ri_neto_21:   parseMonto(document.getElementById('iva-vri-neto21').value),
+      vta_ri_iva_21:    parseMonto(document.getElementById('iva-vri-iva21').value),
+      vta_ri_neto_105:  parseMonto(document.getElementById('iva-vri-neto105').value),
+      vta_ri_iva_105:   parseMonto(document.getElementById('iva-vri-iva105').value),
+      cmp_neto_21:      parseMonto(document.getElementById('iva-cmp-neto21').value),
+      cmp_iva_21:       parseMonto(document.getElementById('iva-cmp-iva21').value),
+      cmp_neto_105:     parseMonto(document.getElementById('iva-cmp-neto105').value),
+      cmp_iva_105:      parseMonto(document.getElementById('iva-cmp-iva105').value),
+      retenciones:      parseMonto(document.getElementById('iva-retenciones').value),
+      saldo_favor_1p:   parseMonto(document.getElementById('iva-saldo1p').value),
+      saldo_favor_2p:   parseMonto(document.getElementById('iva-saldo2p').value),
+    };
+  }
+
+  try {
+    const res  = await fetch('/liquidar-' + tipo, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (data.error) { showError(tipo, data.error); resetBtn(tipo); return; }
+    sessions[tipo] = data.session_id;
+    pollings[tipo] = setInterval(() => fetchEstado(tipo), 2000);
+  } catch(err) {
+    showError(tipo, 'Error de conexión: ' + err);
+    resetBtn(tipo);
+  }
+}
+
+async function fetchEstado(tipo) {
+  if (!sessions[tipo]) return;
+  try {
+    const res  = await fetch('/estado/' + sessions[tipo]);
+    const data = await res.json();
+    updateUI(tipo, data);
+  } catch(e) {}
+}
+
+function updateUI(tipo, data) {
+  const pct = data.progreso || 0;
+  document.getElementById('fill-'  + tipo).style.width   = pct + '%';
+  document.getElementById('pct-'   + tipo).textContent   = pct + '%';
+
+  const logBox = document.getElementById('log-' + tipo);
+  const logs = data.logs || [];
+  for (let i = logCounts[tipo]; i < logs.length; i++) {
+    const msg = logs[i];
+    const div = document.createElement('div');
+    div.className = msg.includes('❌') || msg.includes('Error') ? 'log-err'
+                  : msg.includes('✅') || msg.includes('completado') ? 'log-ok'
+                  : 'log-info';
+    div.textContent = msg;
+    logBox.appendChild(div);
+  }
+  logCounts[tipo] = logs.length;
+  logBox.scrollTop = logBox.scrollHeight;
+
+  const badge = document.getElementById('badge-' + tipo);
+  if (data.estado === 'completado') {
+    badge.textContent  = '✅ Completado';
+    badge.className    = 'status-badge badge-completado';
+    clearInterval(pollings[tipo]);
+    if (data.archivo) {
+      const dl = document.getElementById('dl-' + tipo);
+      dl.href = '/descargar/' + sessions[tipo];
+      dl.style.display = 'block';
+    }
+    resetBtn(tipo, true);
+  } else if (data.estado === 'error') {
+    badge.textContent = '❌ Error';
+    badge.className   = 'status-badge badge-error';
+    clearInterval(pollings[tipo]);
+    resetBtn(tipo);
+  } else {
+    badge.textContent = '⏳ Procesando...';
+    badge.className   = 'status-badge badge-procesando';
+  }
+}
+
+function showError(tipo, msg) {
+  const div = document.createElement('div');
+  div.className   = 'log-err';
+  div.textContent = '❌ ' + msg;
+  document.getElementById('log-' + tipo).appendChild(div);
+}
+
+function resetBtn(tipo, done = false) {
+  const btn = document.getElementById('btn-' + tipo);
+  btn.disabled    = false;
+  btn.textContent = done ? '▶ Volver a liquidar' : '▶ Reintentar';
+}
+
+// ───────────────────────────────────────────────────────
+// Preseleccionar mes anterior
+// ───────────────────────────────────────────────────────
+const hoy     = new Date();
+const mesPrev = hoy.getMonth() === 0 ? 12 : hoy.getMonth();
+const anioPrev = hoy.getMonth() === 0 ? hoy.getFullYear() - 1 : hoy.getFullYear();
+['iibb-mes','com-mes','iva-mes'].forEach(id => {
+  document.getElementById(id).value = mesPrev;
+});
+['iibb-anio','com-anio','iva-anio'].forEach(id => {
+  document.getElementById(id).value = anioPrev;
+});
+</script>
+</body>
+</html>
