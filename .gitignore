@@ -50,3 +50,13 @@ desktop.ini
 # Playwright
 playwright-report/
 test-results/
+
+# Archivos de configuracion con credenciales
+config.json
+credenciales.json
+*.credentials.json
+
+# Carpetas de analisis y trabajo local
+Analisis 1/
+Analisis*/
+analisis*/
