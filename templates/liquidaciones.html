@@ -1030,10 +1030,20 @@ async function iniciarLiquidacion(e, tipo) {
 async function fetchEstado(tipo) {
   if (!sessions[tipo]) return;
   try {
-    const res  = await fetch('/estado/' + sessions[tipo]);
+    const res = await fetch('/estado/' + sessions[tipo]);
+    if (res.status === 404) {
+      // Sesión no encontrada (ej: redeploy mid-proceso) → detener polling
+      clearInterval(pollings[tipo]);
+      showError(tipo, 'Sesión perdida (el servidor fue reiniciado). Volvé a intentarlo.');
+      resetBtn(tipo);
+      sessions[tipo] = null;
+      return;
+    }
     const data = await res.json();
     updateUI(tipo, data);
-  } catch(e) {}
+  } catch(e) {
+    // Error de red transitorio — no detener polling
+  }
 }
 
 function updateUI(tipo, data) {

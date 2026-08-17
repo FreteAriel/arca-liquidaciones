@@ -89,6 +89,8 @@ class _BaseScraper:
             viewport={"width": 1280, "height": 900},
         )
         self.page = await self.context.new_page()
+        # Timeout por defecto para todos los selectores / acciones (ROB-02)
+        self.page.set_default_timeout(60000)
 
     async def close(self):
         try:
@@ -436,10 +438,9 @@ class AutonomoLiquidador(_BaseScraper):
         numero_vep = None
         try:
             texto = await self.page.inner_text("body")
-            import re as _re
-            match = _re.search(r"N[°º]\s*(?:de\s+)?VEP[:\s]*([\d]+)", texto, _re.IGNORECASE)
+            match = re.search(r"N[°º]\s*(?:de\s+)?VEP[:\s]*([\d]+)", texto, re.IGNORECASE)
             if not match:
-                match = _re.search(r"VEP[:\s#Nº]*\s*([\d]{6,})", texto, _re.IGNORECASE)
+                match = re.search(r"VEP[:\s#Nº]*\s*([\d]{6,})", texto, re.IGNORECASE)
             if match:
                 numero_vep = match.group(1)
                 self.log(f"   VEP N°: {numero_vep}")
@@ -717,25 +718,24 @@ class IIBBLocalLiquidador(_BaseScraper):
           - saldo_a_pagar > 0 → hay deuda
           - saldo_a_favor > 0 → hay saldo a favor del contribuyente
         """
-        import re as _re
         texto = await self.page.inner_text("body")
 
         saldo_a_pagar = 0.0
         saldo_a_favor = 0.0
 
         # Buscar "Saldo a Pagar" o "A Pagar"
-        match_pagar = _re.search(
+        match_pagar = re.search(
             r"(?:Saldo\s+a\s+pagar|A\s+pagar|Impuesto\s+a\s+pagar)[^\d]*\$?\s*([\d.,]+)",
-            texto, _re.IGNORECASE
+            texto, re.IGNORECASE
         )
         if match_pagar:
             saldo_a_pagar = float(match_pagar.group(1).replace(".", "").replace(",", "."))
 
         # Buscar "Saldo a Favor" negativo en la tabla (puede venir como importe negativo)
-        match_favor = _re.search(
+        match_favor = re.search(
             r"(?:Saldo\s+a\s+favor|Saldo\s+acumulado|Favor\s+del\s+contribuyente)[^\d\-]*"
             r"(-?\s*[\d.,]+)",
-            texto, _re.IGNORECASE
+            texto, re.IGNORECASE
         )
         if match_favor:
             val = float(match_favor.group(1).replace(" ", "").replace(".", "").replace(",", "."))
@@ -792,11 +792,10 @@ class IIBBLocalLiquidador(_BaseScraper):
                 pass
 
             # Leer número de VEP
-            import re as _re
             texto = await self.page.inner_text("body")
-            match = _re.search(r"N[°º]\s*(?:de\s+)?VEP[:\s]*([\d]+)", texto, _re.IGNORECASE)
+            match = re.search(r"N[°º]\s*(?:de\s+)?VEP[:\s]*([\d]+)", texto, re.IGNORECASE)
             if not match:
-                match = _re.search(r"VEP[:\s#Nº]*\s*([\d]{6,})", texto, _re.IGNORECASE)
+                match = re.search(r"VEP[:\s#Nº]*\s*([\d]{6,})", texto, re.IGNORECASE)
             if match:
                 vep_info["numero_vep"] = match.group(1)
                 self.log(f"   VEP ARBA N°: {vep_info['numero_vep']}")
@@ -845,7 +844,6 @@ class IIBBLocalLiquidador(_BaseScraper):
     # ------------------------------------------------------------------
     async def liquidar(self, anio: int, mes: int, actividades: list,
                        saldo_favor_anterior: float = 0.0,
-                       password_arba: str = None,
                        medio_pago: str = "qr") -> dict:
         """
         Flujo completo IIBB Local con bifurcación saldo a favor / saldo a pagar.
@@ -867,8 +865,7 @@ class IIBBLocalLiquidador(_BaseScraper):
         }
         try:
             await self.start(headless=HEADLESS)
-            pwd = password_arba or self.password
-            await self.login_arba(self.cuit, pwd)
+            await self.login_arba(self.cuit, self.password)
             await self.navegar_a_iibb()
             await self.iniciar_dj(anio, mes)
             await self.cargar_actividades(actividades)
@@ -1222,8 +1219,7 @@ class COMLiquidador(_BaseScraper):
             # Leer total a pagar
             try:
                 texto = await self.page.inner_text("body")
-                import re as _re
-                match = _re.search(r"Total\s+(?:General\s+)?a\s+Pagar[^\d]*\$?\s*([\d.,]+)", texto, _re.IGNORECASE)
+                match = re.search(r"Total\s+(?:General\s+)?a\s+Pagar[^\d]*\$?\s*([\d.,]+)", texto, re.IGNORECASE)
                 if match:
                     resultado["total_a_pagar"] = float(
                         match.group(1).replace(".", "").replace(",", ".")
@@ -1495,7 +1491,6 @@ class IVALiquidador(_BaseScraper):
           - importe_a_pagar > 0 → hay deuda
           - saldo_a_favor > 0   → hay saldo a favor del contribuyente
         """
-        import re as _re
         try:
             texto = await self.page.inner_text("body")
         except Exception:
@@ -1505,19 +1500,19 @@ class IVALiquidador(_BaseScraper):
         saldo_a_favor = 0.0
 
         # Detectar "Importe a ingresar" o "Saldo a pagar"
-        match_pagar = _re.search(
+        match_pagar = re.search(
             r"(?:Importe\s+a\s+ingresar|Saldo\s+a\s+pagar|A\s+pagar|Impuesto\s+a\s+pagar)"
             r"[^\d]*\$?\s*([\d.,]+)",
-            texto, _re.IGNORECASE
+            texto, re.IGNORECASE
         )
         if match_pagar:
             importe_a_pagar = float(match_pagar.group(1).replace(".", "").replace(",", "."))
 
         # Detectar "Saldo técnico a favor del contribuyente" (F.2051)
-        match_favor = _re.search(
+        match_favor = re.search(
             r"(?:Saldo\s+t[eé]cnico\s+a\s+favor|Saldo\s+a\s+favor\s+del\s+contribuyente|"
             r"A\s+favor\s+del\s+contribuyente)[^\d\-]*(-?\s*[\d.,]+)",
-            texto, _re.IGNORECASE
+            texto, re.IGNORECASE
         )
         if match_favor:
             val_str = match_favor.group(1).replace(" ", "").replace(".", "").replace(",", ".")
@@ -1676,11 +1671,10 @@ class IVALiquidador(_BaseScraper):
             await self.page.wait_for_timeout(2000)
 
             # Leer número de VEP
-            import re as _re
             texto = await self.page.inner_text("body")
-            match = _re.search(r"N[°º]\s*(?:de\s+)?VEP[:\s]*([\d]+)", texto, _re.IGNORECASE)
+            match = re.search(r"N[°º]\s*(?:de\s+)?VEP[:\s]*([\d]+)", texto, re.IGNORECASE)
             if not match:
-                match = _re.search(r"VEP[:\s#Nº]*\s*([\d]{6,})", texto, _re.IGNORECASE)
+                match = re.search(r"VEP[:\s#Nº]*\s*([\d]{6,})", texto, re.IGNORECASE)
             if match:
                 vep_info["numero_vep"] = match.group(1)
                 self.log(f"   VEP IVA N°: {vep_info['numero_vep']}")

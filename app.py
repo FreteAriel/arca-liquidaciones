@@ -12,7 +12,7 @@ import os
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # En Railway (o cualquier servidor sin display) usamos headless=True
 # Detectamos por la variable de entorno que Railway inyecta automáticamente
@@ -29,9 +29,37 @@ app = Flask(__name__)
 
 # Estado de las sesiones activas
 sessions: dict[str, dict] = {}
+_sessions_lock = threading.Lock()
+
+# Semáforo: máximo 2 browsers Playwright simultáneos (BUG-02)
+browser_sem = threading.Semaphore(2)
 
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+
+# -----------------------------------------------------------------------
+# Cleanup thread: elimina sesiones con más de 30 minutos (BUG-01)
+# -----------------------------------------------------------------------
+
+SESSION_TTL_MINUTES = 30
+
+def _cleanup_sessions():
+    """Elimina sesiones terminadas con más de SESSION_TTL_MINUTES de antigüedad."""
+    while True:
+        time.sleep(300)  # revisar cada 5 minutos
+        cutoff = datetime.now() - timedelta(minutes=SESSION_TTL_MINUTES)
+        with _sessions_lock:
+            to_del = [
+                sid for sid, s in sessions.items()
+                if s.get("estado") in ("completado", "error")
+                and s.get("_created_at", datetime.now()) < cutoff
+            ]
+            for sid in to_del:
+                sessions.pop(sid, None)
+
+_cleaner = threading.Thread(target=_cleanup_sessions, daemon=True)
+_cleaner.start()
 
 
 # -----------------------------------------------------------------------
@@ -71,13 +99,15 @@ def iniciar():
     fecha_hasta = f"{ultimo_dia:02d}/{mes:02d}/{anio}"
 
     session_id = str(uuid.uuid4())
-    sessions[session_id] = {
-        "estado": "iniciando",
-        "logs": [],
-        "progreso": 0,
-        "archivo": None,
-        "error": None,
-    }
+    with _sessions_lock:
+        sessions[session_id] = {
+            "estado": "iniciando",
+            "logs": [],
+            "progreso": 0,
+            "archivo": None,
+            "error": None,
+            "_created_at": datetime.now(),
+        }
 
     t = threading.Thread(
         target=_run_automation,
@@ -247,13 +277,15 @@ def descargar(session_id):
 
 def _crear_sesion() -> str:
     session_id = str(uuid.uuid4())
-    sessions[session_id] = {
-        "estado": "iniciando",
-        "logs": [],
-        "progreso": 0,
-        "archivo": None,
-        "error": None,
-    }
+    with _sessions_lock:
+        sessions[session_id] = {
+            "estado": "iniciando",
+            "logs": [],
+            "progreso": 0,
+            "archivo": None,
+            "error": None,
+            "_created_at": datetime.now(),
+        }
     return session_id
 
 
@@ -261,12 +293,12 @@ def _run_automation(session_id, cuit, password, password_arba, fecha_desde, fech
                     saldo_favor_1p=0.0, saldo_favor_2p=0.0, alicuota_iibb=0.0, saldo_anterior_iibb=0.0):
     """Ejecuta el flujo completo en un hilo con su propio event loop."""
     loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     try:
-        loop.run_until_complete(
-            _automation(session_id, cuit, password, password_arba, fecha_desde, fecha_hasta, mes, anio,
-                        saldo_favor_1p, saldo_favor_2p, alicuota_iibb, saldo_anterior_iibb)
-        )
+        with browser_sem:
+            loop.run_until_complete(
+                _automation(session_id, cuit, password, password_arba, fecha_desde, fecha_hasta, mes, anio,
+                            saldo_favor_1p, saldo_favor_2p, alicuota_iibb, saldo_anterior_iibb)
+            )
     except Exception as e:
         sessions[session_id]["estado"] = "error"
         sessions[session_id]["error"] = str(e)
@@ -385,7 +417,6 @@ async def _automation(session_id, cuit, password, password_arba, fecha_desde, fe
 def _run_liquidacion_autonomo(session_id, cuit, password, mes, anio,
                                categoria, importe, medio_pago):
     loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     log = lambda msg: _log(session_id, msg)
     try:
         _set_progreso(session_id, 5)
@@ -400,15 +431,16 @@ def _run_liquidacion_autonomo(session_id, cuit, password, mes, anio,
         liq = AutonomoLiquidador(cuit, password, log_fn=log, download_dir=OUTPUT_DIR)
         _set_progreso(session_id, 10)
 
-        resultado = loop.run_until_complete(
-            liq.pagar_autonomo(
-                mes=mes,
-                anio=anio,
-                categoria=categoria,
-                importe=importe,
-                medio_pago=medio_pago,
+        with browser_sem:
+            resultado = loop.run_until_complete(
+                liq.pagar_autonomo(
+                    mes=mes,
+                    anio=anio,
+                    categoria=categoria,
+                    importe=importe,
+                    medio_pago=medio_pago,
+                )
             )
-        )
 
         _set_progreso(session_id, 100)
         if resultado["resultado"] == "ok":
@@ -437,7 +469,6 @@ def _run_liquidacion_autonomo(session_id, cuit, password, mes, anio,
 def _run_liquidacion_iibb(session_id, cuit, password_arba, mes, anio, actividades, saldo_ant,
                            medio_pago="qr"):
     loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     log = lambda msg: _log(session_id, msg)
     try:
         _set_progreso(session_id, 5)
@@ -447,16 +478,16 @@ def _run_liquidacion_iibb(session_id, cuit, password_arba, mes, anio, actividade
         liq = IIBBLocalLiquidador(cuit, password_arba, log_fn=log, download_dir=OUTPUT_DIR)
         _set_progreso(session_id, 10)
 
-        resultado = loop.run_until_complete(
-            liq.liquidar(
-                anio=anio,
-                mes=mes,
-                actividades=actividades,
-                saldo_favor_anterior=saldo_ant,
-                password_arba=password_arba,
-                medio_pago=medio_pago,
+        with browser_sem:
+            resultado = loop.run_until_complete(
+                liq.liquidar(
+                    anio=anio,
+                    mes=mes,
+                    actividades=actividades,
+                    saldo_favor_anterior=saldo_ant,
+                    medio_pago=medio_pago,
+                )
             )
-        )
 
         _set_progreso(session_id, 100)
         res_tipo = resultado.get("resultado", "ok")
@@ -490,7 +521,6 @@ def _run_liquidacion_iibb(session_id, cuit, password_arba, mes, anio, actividade
 
 def _run_liquidacion_com(session_id, cuit, password, mes, anio, base_caba, base_bsas):
     loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     log = lambda msg: _log(session_id, msg)
     try:
         _set_progreso(session_id, 5)
@@ -500,9 +530,10 @@ def _run_liquidacion_com(session_id, cuit, password, mes, anio, base_caba, base_
         liq = COMLiquidador(cuit, password, log_fn=log, download_dir=OUTPUT_DIR)
         _set_progreso(session_id, 10)
 
-        resultado = loop.run_until_complete(
-            liq.liquidar(anio=anio, mes=mes, base_caba=base_caba, base_bsas=base_bsas)
-        )
+        with browser_sem:
+            resultado = loop.run_until_complete(
+                liq.liquidar(anio=anio, mes=mes, base_caba=base_caba, base_bsas=base_bsas)
+            )
 
         _set_progreso(session_id, 100)
         if resultado["resultado"] == "ok":
@@ -527,7 +558,6 @@ def _run_liquidacion_com(session_id, cuit, password, mes, anio, base_caba, base_
 
 def _run_liquidacion_iva(session_id, cuit, password, mes, anio, campos, medio_pago="qr"):
     loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     log = lambda msg: _log(session_id, msg)
     try:
         _set_progreso(session_id, 5)
@@ -541,9 +571,10 @@ def _run_liquidacion_iva(session_id, cuit, password, mes, anio, campos, medio_pa
         liq = IVALiquidador(cuit, password, log_fn=log, download_dir=OUTPUT_DIR)
         _set_progreso(session_id, 10)
 
-        resultado = loop.run_until_complete(
-            liq.liquidar(anio=anio, mes=mes, **campos, medio_pago=medio_pago)
-        )
+        with browser_sem:
+            resultado = loop.run_until_complete(
+                liq.liquidar(anio=anio, mes=mes, **campos, medio_pago=medio_pago)
+            )
 
         _set_progreso(session_id, 100)
         res_tipo = resultado.get("resultado", "ok")
@@ -587,7 +618,9 @@ def _log(session_id: str, msg: str):
 def _set_progreso(session_id: str, valor: int):
     if session_id in sessions:
         sessions[session_id]["progreso"] = valor
-        sessions[session_id]["estado"] = "procesando"
+        # No sobreescribir estado si ya fue marcado como completado/error (BUG-07)
+        if sessions[session_id]["estado"] not in ("completado", "error"):
+            sessions[session_id]["estado"] = "procesando"
 
 
 # -----------------------------------------------------------------------
