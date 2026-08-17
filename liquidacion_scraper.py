@@ -659,27 +659,62 @@ class IIBBLocalLiquidador(_BaseScraper):
 
     # ------------------------------------------------------------------
     async def cerrar_dj(self, saldo_favor_anterior: float = 0.0):
-        """Cierra la DJ y envía — opcionalmente ingresa saldo a favor anterior."""
-        self.log("📤 Cerrando y enviando DJ...")
+        """
+        Navega hasta preCerrarDJ.do e ingresa el saldo a favor anterior si aplica.
 
-        # Navegar a Consulta DDJJ pendientes o Cierre desde el menú
+        Flujo real (verificado en video):
+          admActividad.do → Volver → detalleDJView.do → Enviar → preCerrarDJ.do
+          (en preCerrarDJ.do se muestra el campo "Saldo a favor anterior" y el
+           saldo final del contribuyente; AÚN NO está enviada la DJ)
+
+        Después de este método la página queda en preCerrarDJ.do, lista para
+        que leer_saldo_cierre() lea los importes y luego enviar_dj_final()
+        haga el submit definitivo.
+        """
+        self.log("📤 Navegando a confirmación de cierre DJ...")
+
+        # Paso 1: si estamos en admActividad.do, hacer click Volver → detalleDJView.do
         try:
-            await self.page.click("text=Presentación")
-            await self.page.wait_for_selector("text=Dj Anticipo", timeout=5000)
-            await self.page.click("text=Dj Anticipo")
-            try:
-                await self.page.wait_for_selector("text=Consulta DDJJ pendientes", timeout=3000)
-                await self.page.click("text=Consulta DDJJ pendientes")
+            volver_btn = self.page.locator(
+                "button:has-text('Volver'), input[value='Volver'], a:has-text('Volver')"
+            )
+            if await volver_btn.count() > 0:
+                await volver_btn.first.click()
                 await self.page.wait_for_load_state("networkidle", timeout=15000)
-                # Abrir la DJ pendiente
-                await self.page.click("a:has-text('Ver'), a:has-text('Abrir'), td a", timeout=5000)
-                await self.page.wait_for_load_state("networkidle", timeout=15000)
-            except Exception:
-                pass
         except Exception:
             pass
 
-        # Ingresar saldo a favor anterior si > 0
+        # Paso 2: si todavía no estamos en detalleDJView, navegar via menú
+        if "detalleDJView" not in self.page.url:
+            try:
+                await self.page.click("text=Presentación")
+                await self.page.wait_for_selector("text=Dj Anticipo", timeout=5000)
+                await self.page.click("text=Dj Anticipo")
+                try:
+                    await self.page.wait_for_selector("text=Consulta DDJJ pendientes", timeout=3000)
+                    await self.page.click("text=Consulta DDJJ pendientes")
+                    await self.page.wait_for_load_state("networkidle", timeout=15000)
+                    # Abrir la DJ pendiente de la tabla
+                    await self.page.click("a:has-text('Ver'), a:has-text('Abrir'), td a", timeout=5000)
+                    await self.page.wait_for_load_state("networkidle", timeout=15000)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        # Paso 3: desde detalleDJView.do, click PRIMER "Enviar" → preCerrarDJ.do
+        # (este click NO envía aún la DJ — lleva a la página de confirmación)
+        try:
+            await self.page.click(
+                "button:has-text('Enviar'), input[value*='Enviar']",
+                timeout=10000
+            )
+            await self.page.wait_for_load_state("networkidle", timeout=20000)
+            self.log("   → Página de confirmación (preCerrarDJ)")
+        except Exception as e:
+            self.log(f"   ⚠️ No se encontró 'Enviar' en detalleDJView: {e}")
+
+        # Paso 4: en preCerrarDJ.do, ingresar saldo a favor anterior si > 0 y recalcular
         if saldo_favor_anterior > 0:
             try:
                 campo_saldo = await self.page.query_selector(
@@ -690,7 +725,6 @@ class IIBBLocalLiquidador(_BaseScraper):
                     await campo_saldo.triple_click()
                     await campo_saldo.fill(str(saldo_favor_anterior).replace(".", ","))
                     self.log(f"   Saldo a favor anterior: $ {saldo_favor_anterior:,.2f}")
-                    # Buscar botón "Recalcular" o "Actualizar"
                     try:
                         await self.page.click(
                             "button:has-text('Recalcular'), button:has-text('Actualizar'), "
@@ -701,14 +735,64 @@ class IIBBLocalLiquidador(_BaseScraper):
                         pass
             except Exception as e:
                 self.log(f"   ⚠️ No se pudo ingresar saldo anterior: {e}")
+        # ← La página queda en preCerrarDJ.do para que leer_saldo_cierre() la lea
 
-        # Click en "Enviar"
+    # ------------------------------------------------------------------
+    async def enviar_dj_final(self) -> str | None:
+        """
+        Hace click en el 'Enviar' FINAL de preCerrarDJ.do, que efectivamente
+        presenta la DJ ante ARBA y genera el comprobante R-606M.
+
+        Retorna el path al PDF descargado, o None si no se pudo capturar.
+        """
+        self.log("📤 Enviando DJ (confirmación final)...")
+        pdf_path = None
+
+        # Intento A: el PDF se descarga directamente al hacer click en Enviar
+        try:
+            async with self.page.expect_download(timeout=30000) as dl_info:
+                await self.page.click("button:has-text('Enviar'), input[value*='Enviar']")
+            download = await dl_info.value
+            fname = download.suggested_filename or "IIBB_R606M.pdf"
+            pdf_path = os.path.join(self.download_dir, fname)
+            await download.save_as(pdf_path)
+            self.log(f"✅ DJ enviada — comprobante: {os.path.basename(pdf_path)}")
+            return pdf_path
+        except Exception:
+            pass
+
+        # Intento B: el PDF se abre en una nueva pestaña (resumenPDF.do)
+        try:
+            async with self.context.expect_page() as page_info:
+                await self.page.click("button:has-text('Enviar'), input[value*='Enviar']")
+            new_page = await page_info.value
+            await new_page.wait_for_load_state("networkidle", timeout=20000)
+            try:
+                pdf_path = os.path.join(self.download_dir, "IIBB_R606M.pdf")
+                await new_page.pdf(path=pdf_path)
+                self.log(f"✅ DJ enviada — comprobante capturado desde nueva pestaña")
+            except Exception:
+                # Si new_page.pdf() no está disponible (sin headless), intentar descargar
+                try:
+                    async with new_page.expect_download(timeout=15000) as dl_info:
+                        await new_page.click("a:has-text('Descargar'), a:has-text('PDF')")
+                    dl = await dl_info.value
+                    pdf_path = os.path.join(self.download_dir, dl.suggested_filename or "IIBB_R606M.pdf")
+                    await dl.save_as(pdf_path)
+                except Exception:
+                    pdf_path = None
+            return pdf_path
+        except Exception:
+            pass
+
+        # Intento C: click sin captura (fallback mínimo)
         try:
             await self.page.click("button:has-text('Enviar'), input[value*='Enviar']")
             await self.page.wait_for_load_state("networkidle", timeout=30000)
-            self.log("✅ DJ enviada correctamente")
+            self.log("✅ DJ enviada (comprobante no capturado automáticamente)")
         except Exception as e:
             self.log(f"⚠️ Error al enviar DJ: {e}")
+        return None
 
     # ------------------------------------------------------------------
     async def leer_saldo_cierre(self) -> tuple[float, float]:
@@ -869,26 +953,30 @@ class IIBBLocalLiquidador(_BaseScraper):
             await self.navegar_a_iibb()
             await self.iniciar_dj(anio, mes)
             await self.cargar_actividades(actividades)
+
+            # cerrar_dj navega hasta preCerrarDJ.do e ingresa saldo anterior si aplica
+            # pero NO envía aún la DJ (queda en la página de confirmación)
             await self.cerrar_dj(saldo_favor_anterior)
 
-            # Leer resultado del cierre
+            # Leer saldo desde preCerrarDJ.do (ANTES del envío final)
             saldo_a_pagar, saldo_a_favor = await self.leer_saldo_cierre()
             resultado["a_pagar"] = saldo_a_pagar
             resultado["a_favor"] = saldo_a_favor
 
             if saldo_a_pagar > 0:
-                # CASO B: hay deuda → generar VEP
+                # CASO B: hay deuda → enviar DJ, capturar comprobante y generar VEP
                 resultado["resultado"] = "saldo_a_pagar"
                 self.log(f"💰 Saldo a pagar detectado: $ {saldo_a_pagar:,.2f}")
+                pdf = await self.enviar_dj_final()
+                resultado["comprobante"] = pdf
                 vep = await self.generar_vep_arba(saldo_a_pagar, medio_pago)
                 resultado["vep"] = vep
             else:
-                # CASO A: saldo a favor → solo descargar comprobante
+                # CASO A: saldo a favor → enviar DJ y capturar comprobante R-606M
                 resultado["resultado"] = "saldo_a_favor"
                 self.log(f"✅ Saldo a favor del contribuyente: $ {saldo_a_favor:,.2f}")
-
-            pdf = await self.descargar_comprobante()
-            resultado["comprobante"] = pdf
+                pdf = await self.enviar_dj_final()
+                resultado["comprobante"] = pdf
 
         except Exception as e:
             resultado["resultado"] = "error"
