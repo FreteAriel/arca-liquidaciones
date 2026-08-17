@@ -1,6 +1,7 @@
 """
 Scrapers de liquidación impositiva
 ===================================
+- AutonomoLiquidador   : Genera VEP pago mensual de autónomos en ARCA SETI
 - IIBBLocalLiquidador  : Presenta DJ Anticipo IIBB en ARBA (arba.gov.ar)
 - COMLiquidador        : Presenta DJ CM03 en SIFERE/COMARB y genera VEP
 - IVALiquidador        : Liquida posición IVA en ARCA y genera VEP
@@ -99,6 +100,416 @@ class _BaseScraper:
                 await self.playwright.stop()
         except Exception:
             pass
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Medios de pago ARCA SETI — textos reconocibles en los botones del portal
+# ───────────────────────────────────────────────────────────────────────────────
+
+MEDIOS_PAGO_TEXTOS = {
+    "qr":             ["QR", "Pago con QR", "Cobro con QR"],
+    "pagar":          ["Pagar", "Pagar.com", "Pagar ("],
+    "pagomiscuentas": ["PagoMisCuentas", "Banelco", "PagoMis"],
+    "interbanking":   ["Interbanking"],
+    "xngroup":        ["XN Group", "XN Latin", "XN Group Latin"],
+}
+
+
+async def _seleccionar_medio_pago(page, medio: str, log_fn=print):
+    """
+    Hace click en el botón del medio de pago indicado.
+    medio: "qr" | "pagar" | "pagomiscuentas" | "interbanking" | "xngroup"
+    """
+    textos = MEDIOS_PAGO_TEXTOS.get(medio.lower(), ["QR"])
+    for texto in textos:
+        try:
+            btn = page.get_by_text(texto, exact=False)
+            if await btn.count() > 0:
+                await btn.first.click()
+                log_fn(f"   ✅ Medio de pago seleccionado: {texto}")
+                return True
+        except Exception:
+            continue
+    # Fallback: click en el primero disponible
+    log_fn(f"   ⚠️ No se encontró '{medio}' — se intenta con el primer medio disponible")
+    try:
+        btns = await page.query_selector_all(
+            "button.medio-pago, div.medio-pago, li.medio-pago, "
+            "img[alt*='pago'], button:has-text('Pagar'), div[role='button']"
+        )
+        if btns:
+            await btns[0].click()
+            return True
+    except Exception:
+        pass
+    return False
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AUTÓNOMO — ARCA SETI
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class AutonomoLiquidador(_BaseScraper):
+    """
+    Genera el VEP de pago mensual de autónomos en ARCA SETI.
+
+    Flujo:
+        ARCA login → SETI → Pagos → Gestión de VEP → Nuevo VEP
+        → Grupo "Autonomo" → Tipo "Autonomo - Pago Mensual"
+        → Período mes/año + Categoría + Importe (aportes seg. social 308)
+        → VEPs a enviar → Seleccioná medio de pago → Aceptar
+        → Descargar VEP PDF
+
+    Parámetros de entrada:
+        mes       : int   — Mes del período (1-12)
+        anio      : int   — Año del período
+        categoria : str   — Código + descripción (ej: "301: T3 Cat I Ingresos hasta $25.000")
+                            Puede ser solo el código numérico (ej: "301")
+        importe   : float — Importe a abonar. None = usa el pre-cargado por el sistema
+        medio_pago: str   — "qr"|"pagar"|"pagomiscuentas"|"interbanking"|"xngroup"
+    """
+
+    ARCA_LOGIN_URL = "https://auth.afip.gob.ar/contribuyente_/login.xhtml"
+    SETI_URL       = "https://seti.afip.gob.ar/setiweb/"
+    SETI_NUEVO_VEP = "https://seti.afip.gob.ar/setiweb/#/pago/nuevo-vep?op=1"
+    SETI_VEPS      = "https://seti.afip.gob.ar/setiweb/#/pago/veps-a-enviar"
+
+    # ------------------------------------------------------------------
+    async def login_arca(self):
+        """Login en ARCA con Clave Fiscal."""
+        self.log("🔐 Iniciando sesión en ARCA...")
+        await self.page.goto(self.ARCA_LOGIN_URL, wait_until="networkidle", timeout=30000)
+
+        cuit_fmt = (
+            f"{self.cuit[:2]}-{self.cuit[2:10]}-{self.cuit[10:]}"
+            if len(self.cuit) == 11 else self.cuit
+        )
+        await self.page.wait_for_selector("#F1\\:username, input[name='username']", timeout=15000)
+        try:
+            await self.page.fill("#F1\\:username", cuit_fmt)
+        except Exception:
+            await self.page.fill("input[name='username']", cuit_fmt)
+
+        await self.page.click("#F1\\:btnSiguiente, button:has-text('Siguiente')")
+        await self.page.wait_for_load_state("networkidle", timeout=15000)
+
+        await self.page.wait_for_selector("input[type='password']", timeout=15000)
+        await self.page.fill("input[type='password']", self.password)
+        await self.page.click("#F1\\:btnIngresar, button:has-text('Ingresar'), button[type='submit']")
+        await self.page.wait_for_load_state("networkidle", timeout=30000)
+        self.log("✅ Login ARCA exitoso")
+
+    # ------------------------------------------------------------------
+    async def navegar_seti(self):
+        """Navega al portal SETI."""
+        self.log("🌐 Navegando a SETI...")
+        await self.page.goto(self.SETI_URL, wait_until="networkidle", timeout=30000)
+        # Cerrar popup "Novedades" si aparece
+        try:
+            await self.page.click(
+                "button:has-text('Entendido'), button:has-text('Cerrar'), "
+                "button:has-text('Aceptar'), [aria-label='Cerrar']",
+                timeout=5000
+            )
+        except Exception:
+            pass
+        self.log("✅ En SETI")
+
+    # ------------------------------------------------------------------
+    async def crear_vep_autonomo(self, mes: int, anio: int,
+                                  categoria: str, importe: float = None) -> float:
+        """
+        Completa el formulario de Nuevo VEP para autónomos.
+        Retorna el importe final del VEP (puede diferir si se usó el pre-cargado).
+        """
+        self.log(f"📝 Creando VEP Autónomo — {mes:02d}/{anio} — Categoría: {categoria}")
+
+        # Navegar a Pagos → Gestión VEP → Nuevo VEP
+        await self.page.goto(self.SETI_NUEVO_VEP, wait_until="networkidle", timeout=30000)
+        await self.page.wait_for_load_state("networkidle", timeout=20000)
+
+        # Esperar que cargue el formulario
+        await self.page.wait_for_timeout(2000)
+
+        # ── Paso 1: CUIT / Organismo / Grupo / Tipo ──────────────────────────
+        self.log("   Paso 1: Seleccionando organismo y tipo de pago...")
+
+        # CUIT — si hay dropdown de contribuyentes, elegir el propio CUIT
+        try:
+            cuit_fmt = f"{self.cuit[:2]}-{self.cuit[2:10]}-{self.cuit[10:]}"
+            await self.page.select_option(
+                "select[formcontrolname*='cuit'], select[id*='cuit'], select[name*='cuit']",
+                label=cuit_fmt, timeout=5000
+            )
+        except Exception:
+            pass
+
+        # Organismo Recaudador → ARCA (suele venir prellenado)
+        try:
+            await self.page.select_option(
+                "select[formcontrolname*='organismo'], select[id*='organismo']",
+                label="ARCA", timeout=5000
+            )
+        except Exception:
+            pass
+
+        # Grupos de Tipos de Pagos → "Autonomo"
+        try:
+            await self.page.select_option(
+                "select[formcontrolname*='grupo'], select[id*='grupo'], select[name*='grupo']",
+                label="Autonomo", timeout=8000
+            )
+            await self.page.wait_for_timeout(1500)
+        except Exception:
+            # Intentar por texto visible
+            try:
+                await self.page.get_by_label("Grupos de Tipos de Pagos").select_option(
+                    label="Autonomo"
+                )
+            except Exception:
+                self.log("   ⚠️ No se pudo seleccionar grupo 'Autonomo'")
+
+        # Tipo de Pago → "Autonomo - Pago Mensual"
+        try:
+            await self.page.select_option(
+                "select[formcontrolname*='tipo'], select[id*='tipo'], select[name*='tipo']",
+                label="Autonomo - Pago Mensual", timeout=8000
+            )
+        except Exception:
+            try:
+                await self.page.get_by_label("Tipo de Pago").select_option(
+                    label="Autonomo - Pago Mensual"
+                )
+            except Exception:
+                self.log("   ⚠️ No se pudo seleccionar tipo 'Autonomo - Pago Mensual'")
+
+        # Click "Siguiente"
+        await self.page.click(
+            "button:has-text('Siguiente'), input[value='Siguiente'], "
+            "button:has-text('SIGUIENTE')"
+        )
+        await self.page.wait_for_load_state("networkidle", timeout=20000)
+        await self.page.wait_for_timeout(2000)
+
+        # ── Paso 2: Período + Categoría + Importe ────────────────────────────
+        self.log(f"   Paso 2: Ingresando período {mes:02d}/{anio} y categoría...")
+
+        # Mes del período
+        try:
+            await self.page.select_option(
+                "select[formcontrolname*='mes'], select[id*='mes'], select[name*='mes']",
+                value=str(mes), timeout=5000
+            )
+        except Exception:
+            try:
+                await self.page.fill(
+                    "input[formcontrolname*='mes'], input[id*='mes']", str(mes)
+                )
+            except Exception:
+                pass
+
+        # Año del período
+        try:
+            await self.page.select_option(
+                "select[formcontrolname*='anio'], select[id*='anio'], select[name*='anio'], "
+                "select[formcontrolname*='year'], select[id*='year']",
+                value=str(anio), timeout=5000
+            )
+        except Exception:
+            try:
+                await self.page.fill(
+                    "input[formcontrolname*='anio'], input[id*='anio'], "
+                    "input[formcontrolname*='year']", str(anio)
+                )
+            except Exception:
+                pass
+
+        # Categoría / CRA
+        try:
+            # Intentar match exacto primero, luego por código numérico
+            cod = categoria.split(":")[0].strip() if ":" in categoria else categoria.strip()
+            for lbl in [categoria, cod]:
+                try:
+                    await self.page.select_option(
+                        "select[formcontrolname*='categoria'], select[id*='categoria'], "
+                        "select[formcontrolname*='cra'], select[id*='cra']",
+                        label=lbl, timeout=5000
+                    )
+                    break
+                except Exception:
+                    continue
+        except Exception:
+            self.log(f"   ⚠️ No se pudo seleccionar categoría '{categoria}'")
+
+        await self.page.wait_for_timeout(2000)  # esperar que se pre-cargue el importe
+
+        # Importe — aportes seg. social autónomos (código 308)
+        importe_final = importe
+        if importe is not None:
+            try:
+                campo_imp = await self.page.query_selector(
+                    "input[formcontrolname*='importe'], input[id*='importe'], "
+                    "input[formcontrolname*='monto'], input[id*='monto'], "
+                    "input[formcontrolname*='aportes']"
+                )
+                if campo_imp:
+                    await campo_imp.triple_click()
+                    await campo_imp.fill(str(importe).replace(".", ","))
+                    self.log(f"   Importe ingresado: $ {importe:,.2f}")
+            except Exception as e:
+                self.log(f"   ⚠️ No se pudo modificar importe: {e}")
+        else:
+            # Leer el importe pre-cargado para devolverlo
+            try:
+                campo_imp = await self.page.query_selector(
+                    "input[formcontrolname*='importe'], input[id*='importe'], "
+                    "input[formcontrolname*='monto'], input[id*='monto'], "
+                    "input[formcontrolname*='aportes']"
+                )
+                if campo_imp:
+                    val = await campo_imp.input_value()
+                    importe_final = float(val.replace(".", "").replace(",", ".")) if val else None
+                    if importe_final:
+                        self.log(f"   Importe pre-cargado: $ {importe_final:,.2f}")
+            except Exception:
+                pass
+
+        # Click "Siguiente"
+        await self.page.click(
+            "button:has-text('Siguiente'), input[value='Siguiente'], "
+            "button:has-text('SIGUIENTE')"
+        )
+        await self.page.wait_for_load_state("networkidle", timeout=20000)
+        await self.page.wait_for_timeout(2000)
+        self.log("   ✅ VEP creado — en lista de VEPs a enviar")
+        return importe_final
+
+    # ------------------------------------------------------------------
+    async def seleccionar_y_enviar_vep(self, medio_pago: str = "qr") -> str | None:
+        """
+        En la pantalla 'VEPs a enviar', marca el VEP y selecciona el medio de pago.
+        Retorna el número de VEP si lo puede leer.
+        """
+        self.log(f"💳 Seleccionando medio de pago: {medio_pago}...")
+
+        # Marcar el checkbox del VEP
+        try:
+            checkbox = await self.page.query_selector(
+                "input[type='checkbox'], mat-checkbox, "
+                "td:first-child input[type='checkbox']"
+            )
+            if checkbox:
+                await checkbox.check()
+                await self.page.wait_for_timeout(500)
+        except Exception:
+            pass
+
+        # Click en "Seleccioná medio de pago"
+        await self.page.click(
+            "button:has-text('Seleccioná medio de pago'), "
+            "button:has-text('Selecciona medio de pago'), "
+            "button:has-text('Seleccionar medio'), "
+            "a:has-text('medio de pago')",
+            timeout=10000
+        )
+        await self.page.wait_for_load_state("networkidle", timeout=15000)
+        await self.page.wait_for_timeout(1500)
+
+        # Seleccionar el medio de pago
+        await _seleccionar_medio_pago(self.page, medio_pago, self.log)
+        await self.page.wait_for_timeout(500)
+
+        # Click "Aceptar"
+        try:
+            await self.page.click(
+                "button:has-text('Aceptar'), button:has-text('ACEPTAR'), "
+                "button:has-text('Continuar'), button:has-text('Confirmar')",
+                timeout=8000
+            )
+            await self.page.wait_for_load_state("networkidle", timeout=20000)
+        except Exception:
+            pass
+
+        await self.page.wait_for_timeout(2000)
+
+        # Leer número de VEP de la pantalla final
+        numero_vep = None
+        try:
+            texto = await self.page.inner_text("body")
+            import re as _re
+            match = _re.search(r"N[°º]\s*(?:de\s+)?VEP[:\s]*([\d]+)", texto, _re.IGNORECASE)
+            if not match:
+                match = _re.search(r"VEP[:\s#Nº]*\s*([\d]{6,})", texto, _re.IGNORECASE)
+            if match:
+                numero_vep = match.group(1)
+                self.log(f"   VEP N°: {numero_vep}")
+        except Exception:
+            pass
+
+        return numero_vep
+
+    # ------------------------------------------------------------------
+    async def descargar_vep_pdf(self) -> str | None:
+        """Descarga el PDF del VEP desde la pantalla de confirmación."""
+        self.log("📄 Descargando PDF del VEP...")
+        try:
+            async with self.page.expect_download(timeout=25000) as dl_info:
+                await self.page.click(
+                    "button:has-text('Descargar VEP'), a:has-text('Descargar VEP'), "
+                    "button:has-text('Descargar'), a:has-text('Descargar')",
+                    timeout=10000
+                )
+            download = await dl_info.value
+            fname = download.suggested_filename or "VEP_Autonomo.pdf"
+            path = os.path.join(self.download_dir, fname)
+            await download.save_as(path)
+            self.log(f"✅ PDF descargado: {os.path.basename(path)}")
+            return path
+        except Exception as e:
+            self.log(f"   ⚠️ No se pudo descargar PDF: {e}")
+            # Intentar captura de pantalla como fallback
+            try:
+                path_png = os.path.join(self.download_dir, "VEP_Autonomo_screen.png")
+                await self.page.screenshot(path=path_png, full_page=True)
+                self.log(f"   📸 Captura de pantalla guardada: {os.path.basename(path_png)}")
+                return path_png
+            except Exception:
+                return None
+
+    # ------------------------------------------------------------------
+    async def pagar_autonomo(self, mes: int, anio: int,
+                              categoria: str,
+                              importe: float = None,
+                              medio_pago: str = "qr") -> dict:
+        """
+        Flujo completo de pago mensual de autónomos.
+        Retorna dict con numero_vep, importe, pdf_path, resultado.
+        """
+        resultado = {
+            "resultado": "ok",
+            "numero_vep": None,
+            "importe": importe,
+            "pdf_path": None,
+            "error": None,
+        }
+        try:
+            await self.start(headless=HEADLESS)
+            await self.login_arca()
+            await self.navegar_seti()
+            importe_real = await self.crear_vep_autonomo(mes, anio, categoria, importe)
+            resultado["importe"] = importe_real
+            numero_vep = await self.seleccionar_y_enviar_vep(medio_pago)
+            resultado["numero_vep"] = numero_vep
+            pdf = await self.descargar_vep_pdf()
+            resultado["pdf_path"] = pdf
+            self.log(f"✅ Pago autónomo completado — VEP N°: {numero_vep}")
+        except Exception as e:
+            resultado["resultado"] = "error"
+            resultado["error"] = str(e)
+            self.log(f"❌ Error en pago autónomo: {e}")
+        finally:
+            await self.close()
+        return resultado
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -299,17 +710,131 @@ class IIBBLocalLiquidador(_BaseScraper):
             self.log(f"⚠️ Error al enviar DJ: {e}")
 
     # ------------------------------------------------------------------
+    async def leer_saldo_cierre(self) -> tuple[float, float]:
+        """
+        Lee el resultado del cierre de DJ.
+        Retorna (saldo_a_pagar, saldo_a_favor):
+          - saldo_a_pagar > 0 → hay deuda
+          - saldo_a_favor > 0 → hay saldo a favor del contribuyente
+        """
+        import re as _re
+        texto = await self.page.inner_text("body")
+
+        saldo_a_pagar = 0.0
+        saldo_a_favor = 0.0
+
+        # Buscar "Saldo a Pagar" o "A Pagar"
+        match_pagar = _re.search(
+            r"(?:Saldo\s+a\s+pagar|A\s+pagar|Impuesto\s+a\s+pagar)[^\d]*\$?\s*([\d.,]+)",
+            texto, _re.IGNORECASE
+        )
+        if match_pagar:
+            saldo_a_pagar = float(match_pagar.group(1).replace(".", "").replace(",", "."))
+
+        # Buscar "Saldo a Favor" negativo en la tabla (puede venir como importe negativo)
+        match_favor = _re.search(
+            r"(?:Saldo\s+a\s+favor|Saldo\s+acumulado|Favor\s+del\s+contribuyente)[^\d\-]*"
+            r"(-?\s*[\d.,]+)",
+            texto, _re.IGNORECASE
+        )
+        if match_favor:
+            val = float(match_favor.group(1).replace(" ", "").replace(".", "").replace(",", "."))
+            saldo_a_favor = abs(val)
+
+        self.log(f"   📊 Cierre DJ: A pagar ${saldo_a_pagar:,.2f} | A favor ${saldo_a_favor:,.2f}")
+        return saldo_a_pagar, saldo_a_favor
+
+    # ------------------------------------------------------------------
+    async def generar_vep_arba(self, importe: float, medio_pago: str = "qr") -> dict:
+        """
+        Genera el VEP de IIBB ARBA cuando hay saldo a pagar.
+        Intenta desde el portal ARBA → Liquidaciones → VEP.
+        Retorna dict con numero_vep y pdf_path.
+        """
+        self.log(f"💳 Generando VEP ARBA — Importe: $ {importe:,.2f}...")
+        vep_info = {"numero_vep": None, "pdf_path": None}
+        try:
+            # Desde la pantalla actual de ARBA (post-cierre DJ), buscar link de pago/VEP
+            try:
+                await self.page.click(
+                    "a:has-text('Pagar'), button:has-text('Pagar'), "
+                    "a:has-text('VEP'), button:has-text('VEP'), "
+                    "a:has-text('Generar VEP'), a:has-text('Volante')",
+                    timeout=8000
+                )
+                await self.page.wait_for_load_state("networkidle", timeout=15000)
+            except Exception:
+                # Navegar a sección de liquidaciones ARBA
+                try:
+                    await self.page.click("text=Liquidaciones", timeout=5000)
+                    await self.page.wait_for_load_state("networkidle", timeout=10000)
+                    await self.page.click(
+                        "a:has-text('VEP'), a:has-text('Pago'), button:has-text('Generar')",
+                        timeout=5000
+                    )
+                    await self.page.wait_for_load_state("networkidle", timeout=10000)
+                except Exception:
+                    pass
+
+            # Seleccionar medio de pago
+            await _seleccionar_medio_pago(self.page, medio_pago, self.log)
+            await self.page.wait_for_timeout(500)
+
+            # Confirmar / Enviar VEP
+            try:
+                await self.page.click(
+                    "button:has-text('Aceptar'), button:has-text('Enviar'), "
+                    "button:has-text('Confirmar'), input[value='Enviar']",
+                    timeout=8000
+                )
+                await self.page.wait_for_load_state("networkidle", timeout=20000)
+            except Exception:
+                pass
+
+            # Leer número de VEP
+            import re as _re
+            texto = await self.page.inner_text("body")
+            match = _re.search(r"N[°º]\s*(?:de\s+)?VEP[:\s]*([\d]+)", texto, _re.IGNORECASE)
+            if not match:
+                match = _re.search(r"VEP[:\s#Nº]*\s*([\d]{6,})", texto, _re.IGNORECASE)
+            if match:
+                vep_info["numero_vep"] = match.group(1)
+                self.log(f"   VEP ARBA N°: {vep_info['numero_vep']}")
+
+            # Descargar PDF
+            try:
+                async with self.page.expect_download(timeout=20000) as dl_info:
+                    await self.page.click(
+                        "button:has-text('Descargar'), a:has-text('Descargar'), "
+                        "a:has-text('PDF'), button:has-text('PDF')",
+                        timeout=10000
+                    )
+                download = await dl_info.value
+                fname = download.suggested_filename or "VEP_IIBB_ARBA.pdf"
+                path = os.path.join(self.download_dir, fname)
+                await download.save_as(path)
+                vep_info["pdf_path"] = path
+                self.log(f"✅ VEP ARBA descargado: {os.path.basename(path)}")
+            except Exception as e:
+                self.log(f"   ⚠️ No se pudo descargar VEP ARBA: {e}")
+
+        except Exception as e:
+            self.log(f"   ⚠️ Error generando VEP ARBA: {e}")
+
+        return vep_info
+
+    # ------------------------------------------------------------------
     async def descargar_comprobante(self) -> str | None:
-        """Descarga el PDF comprobante de la DJ enviada."""
-        self.log("📄 Descargando comprobante PDF...")
+        """Descarga el PDF comprobante R-606M de la DJ enviada."""
+        self.log("📄 Descargando comprobante R-606M...")
         try:
             async with self.page.expect_download(timeout=20000) as dl_info:
                 await self.page.click(
                     "a:has-text('PDF'), a:has-text('Comprobante'), "
-                    "a:has-text('Imprimir'), button:has-text('PDF')"
+                    "a:has-text('R-606'), a:has-text('Imprimir'), button:has-text('PDF')"
                 )
             download = await dl_info.value
-            path = os.path.join(self.download_dir, download.suggested_filename or "IIBB_comprobante.pdf")
+            path = os.path.join(self.download_dir, download.suggested_filename or "IIBB_R606M.pdf")
             await download.save_as(path)
             self.log(f"✅ Comprobante guardado: {os.path.basename(path)}")
             return path
@@ -320,12 +845,26 @@ class IIBBLocalLiquidador(_BaseScraper):
     # ------------------------------------------------------------------
     async def liquidar(self, anio: int, mes: int, actividades: list,
                        saldo_favor_anterior: float = 0.0,
-                       password_arba: str = None) -> dict:
+                       password_arba: str = None,
+                       medio_pago: str = "qr") -> dict:
         """
-        Flujo completo IIBB Local.
-        Retorna dict con 'resultado', 'comprobante', 'a_pagar'.
+        Flujo completo IIBB Local con bifurcación saldo a favor / saldo a pagar.
+
+        Retorna dict con:
+          - resultado: "saldo_a_favor" | "saldo_a_pagar" | "error"
+          - comprobante: path al PDF R-606M
+          - a_pagar: float (0 si hay saldo a favor)
+          - a_favor: float (0 si hay saldo a pagar)
+          - vep: dict con numero_vep y pdf_path (solo si saldo a pagar)
         """
-        resultado = {"resultado": "ok", "comprobante": None, "a_pagar": 0.0, "error": None}
+        resultado = {
+            "resultado": "ok",
+            "comprobante": None,
+            "a_pagar": 0.0,
+            "a_favor": 0.0,
+            "vep": None,
+            "error": None,
+        }
         try:
             await self.start(headless=HEADLESS)
             pwd = password_arba or self.password
@@ -335,20 +874,25 @@ class IIBBLocalLiquidador(_BaseScraper):
             await self.cargar_actividades(actividades)
             await self.cerrar_dj(saldo_favor_anterior)
 
-            # Intentar leer el monto a pagar de la página
-            try:
-                texto = await self.page.inner_text("body")
-                import re as _re
-                match = _re.search(r"A PAGAR[^\d]*\$?\s*([\d.,]+)", texto, _re.IGNORECASE)
-                if match:
-                    resultado["a_pagar"] = float(
-                        match.group(1).replace(".", "").replace(",", ".")
-                    )
-            except Exception:
-                pass
+            # Leer resultado del cierre
+            saldo_a_pagar, saldo_a_favor = await self.leer_saldo_cierre()
+            resultado["a_pagar"] = saldo_a_pagar
+            resultado["a_favor"] = saldo_a_favor
+
+            if saldo_a_pagar > 0:
+                # CASO B: hay deuda → generar VEP
+                resultado["resultado"] = "saldo_a_pagar"
+                self.log(f"💰 Saldo a pagar detectado: $ {saldo_a_pagar:,.2f}")
+                vep = await self.generar_vep_arba(saldo_a_pagar, medio_pago)
+                resultado["vep"] = vep
+            else:
+                # CASO A: saldo a favor → solo descargar comprobante
+                resultado["resultado"] = "saldo_a_favor"
+                self.log(f"✅ Saldo a favor del contribuyente: $ {saldo_a_favor:,.2f}")
 
             pdf = await self.descargar_comprobante()
             resultado["comprobante"] = pdf
+
         except Exception as e:
             resultado["resultado"] = "error"
             resultado["error"] = str(e)
@@ -944,30 +1488,224 @@ class IVALiquidador(_BaseScraper):
             self.log(f"⚠️ Error al presentar DJ: {e}")
 
     # ------------------------------------------------------------------
-    async def generar_vep(self) -> str | None:
-        """Genera y descarga el VEP de IVA."""
-        self.log("💳 Generando VEP IVA...")
-        vep_path = None
+    async def leer_posicion_f2051(self) -> tuple[float, float]:
+        """
+        Lee la posición IVA del F.2051 o de la página de vista previa.
+        Retorna (importe_a_pagar, saldo_a_favor):
+          - importe_a_pagar > 0 → hay deuda
+          - saldo_a_favor > 0   → hay saldo a favor del contribuyente
+        """
+        import re as _re
         try:
-            await self.page.click(
-                "button:has-text('VEP'), a:has-text('VEP'), "
-                "button:has-text('Volante'), a:has-text('Pagar')"
-            )
-            await self.page.wait_for_load_state("networkidle", timeout=20000)
+            texto = await self.page.inner_text("body")
+        except Exception:
+            return 0.0, 0.0
 
-            async with self.page.expect_download(timeout=30000) as dl_info:
+        importe_a_pagar = 0.0
+        saldo_a_favor = 0.0
+
+        # Detectar "Importe a ingresar" o "Saldo a pagar"
+        match_pagar = _re.search(
+            r"(?:Importe\s+a\s+ingresar|Saldo\s+a\s+pagar|A\s+pagar|Impuesto\s+a\s+pagar)"
+            r"[^\d]*\$?\s*([\d.,]+)",
+            texto, _re.IGNORECASE
+        )
+        if match_pagar:
+            importe_a_pagar = float(match_pagar.group(1).replace(".", "").replace(",", "."))
+
+        # Detectar "Saldo técnico a favor del contribuyente" (F.2051)
+        match_favor = _re.search(
+            r"(?:Saldo\s+t[eé]cnico\s+a\s+favor|Saldo\s+a\s+favor\s+del\s+contribuyente|"
+            r"A\s+favor\s+del\s+contribuyente)[^\d\-]*(-?\s*[\d.,]+)",
+            texto, _re.IGNORECASE
+        )
+        if match_favor:
+            val_str = match_favor.group(1).replace(" ", "").replace(".", "").replace(",", ".")
+            saldo_a_favor = abs(float(val_str))
+
+        self.log(
+            f"   📊 Posición IVA: "
+            f"A pagar ${importe_a_pagar:,.2f} | A favor ${saldo_a_favor:,.2f}"
+        )
+        return importe_a_pagar, saldo_a_favor
+
+    # ------------------------------------------------------------------
+    async def descargar_f2051(self) -> str | None:
+        """Descarga el PDF F.2051 si está disponible."""
+        self.log("📄 Descargando F.2051...")
+        try:
+            async with self.page.expect_download(timeout=20000) as dl_info:
                 await self.page.click(
-                    "button:has-text('Generar VEP'), button:has-text('Descargar'), "
-                    "a:has-text('Descargar VEP'), button:has-text('Enviar VEP')"
+                    "a:has-text('F.2051'), button:has-text('F.2051'), "
+                    "a:has-text('Descargar'), a:has-text('PDF'), "
+                    "button:has-text('Descargar formulario')",
+                    timeout=10000
                 )
             download = await dl_info.value
-            fname = download.suggested_filename or "VEP_IVA.pdf"
-            vep_path = os.path.join(self.download_dir, fname)
-            await download.save_as(vep_path)
-            self.log(f"✅ VEP IVA descargado: {os.path.basename(vep_path)}")
+            fname = download.suggested_filename or "F2051_IVA.pdf"
+            path = os.path.join(self.download_dir, fname)
+            await download.save_as(path)
+            self.log(f"✅ F.2051 guardado: {os.path.basename(path)}")
+            return path
         except Exception as e:
-            self.log(f"⚠️ No se pudo generar VEP IVA: {e}")
-        return vep_path
+            self.log(f"   ⚠️ No se pudo descargar F.2051: {e}")
+            return None
+
+    # ------------------------------------------------------------------
+    async def generar_vep_seti(self, mes: int, anio: int,
+                                importe: float,
+                                medio_pago: str = "qr") -> dict:
+        """
+        Genera el VEP de IVA en ARCA SETI cuando hay saldo a pagar.
+        Navega al Nuevo VEP con grupo/tipo IVA y selecciona el medio de pago.
+        """
+        self.log(f"💳 Generando VEP IVA en SETI — Importe: $ {importe:,.2f}...")
+        vep_info = {"numero_vep": None, "pdf_path": None}
+
+        SETI_NUEVO_VEP = "https://seti.afip.gob.ar/setiweb/#/pago/nuevo-vep?op=1"
+        try:
+            await self.page.goto(SETI_NUEVO_VEP, wait_until="networkidle", timeout=30000)
+            await self.page.wait_for_timeout(2000)
+
+            # Cerrar popup si hay
+            try:
+                await self.page.click(
+                    "button:has-text('Entendido'), button:has-text('Cerrar')",
+                    timeout=4000
+                )
+            except Exception:
+                pass
+
+            # Organismo → ARCA
+            try:
+                await self.page.select_option(
+                    "select[formcontrolname*='organismo'], select[id*='organismo']",
+                    label="ARCA", timeout=5000
+                )
+            except Exception:
+                pass
+
+            # Grupo → "IVA" o "Impuesto al Valor Agregado"
+            for lbl in ["IVA", "Impuesto al Valor Agregado", "Impuesto al valor agregado"]:
+                try:
+                    await self.page.select_option(
+                        "select[formcontrolname*='grupo'], select[id*='grupo']",
+                        label=lbl, timeout=5000
+                    )
+                    await self.page.wait_for_timeout(1000)
+                    break
+                except Exception:
+                    continue
+
+            # Tipo → "IVA - Impuesto al Valor Agregado" o similar
+            for lbl in ["IVA - Impuesto al Valor Agregado", "IVA General", "IVA"]:
+                try:
+                    await self.page.select_option(
+                        "select[formcontrolname*='tipo'], select[id*='tipo']",
+                        label=lbl, timeout=5000
+                    )
+                    break
+                except Exception:
+                    continue
+
+            await self.page.click(
+                "button:has-text('Siguiente'), input[value='Siguiente']"
+            )
+            await self.page.wait_for_load_state("networkidle", timeout=20000)
+            await self.page.wait_for_timeout(2000)
+
+            # Período
+            try:
+                await self.page.select_option(
+                    "select[formcontrolname*='mes'], select[id*='mes']",
+                    value=str(mes), timeout=5000
+                )
+            except Exception:
+                pass
+            try:
+                await self.page.select_option(
+                    "select[formcontrolname*='anio'], select[id*='anio'], "
+                    "select[formcontrolname*='year']",
+                    value=str(anio), timeout=5000
+                )
+            except Exception:
+                pass
+
+            # Importe
+            try:
+                campo_imp = await self.page.query_selector(
+                    "input[formcontrolname*='importe'], input[id*='importe'], "
+                    "input[formcontrolname*='monto']"
+                )
+                if campo_imp:
+                    await campo_imp.triple_click()
+                    await campo_imp.fill(str(importe).replace(".", ","))
+            except Exception:
+                pass
+
+            await self.page.click("button:has-text('Siguiente'), input[value='Siguiente']")
+            await self.page.wait_for_load_state("networkidle", timeout=20000)
+            await self.page.wait_for_timeout(1500)
+
+            # Marcar checkbox del VEP
+            try:
+                checkbox = await self.page.query_selector("input[type='checkbox']")
+                if checkbox:
+                    await checkbox.check()
+                    await self.page.wait_for_timeout(500)
+            except Exception:
+                pass
+
+            # Seleccioná medio de pago
+            await self.page.click(
+                "button:has-text('Seleccioná medio de pago'), "
+                "button:has-text('Seleccionar medio'), a:has-text('medio de pago')",
+                timeout=10000
+            )
+            await self.page.wait_for_load_state("networkidle", timeout=15000)
+            await self.page.wait_for_timeout(1000)
+
+            await _seleccionar_medio_pago(self.page, medio_pago, self.log)
+            await self.page.wait_for_timeout(500)
+
+            await self.page.click(
+                "button:has-text('Aceptar'), button:has-text('Confirmar')",
+                timeout=8000
+            )
+            await self.page.wait_for_load_state("networkidle", timeout=20000)
+            await self.page.wait_for_timeout(2000)
+
+            # Leer número de VEP
+            import re as _re
+            texto = await self.page.inner_text("body")
+            match = _re.search(r"N[°º]\s*(?:de\s+)?VEP[:\s]*([\d]+)", texto, _re.IGNORECASE)
+            if not match:
+                match = _re.search(r"VEP[:\s#Nº]*\s*([\d]{6,})", texto, _re.IGNORECASE)
+            if match:
+                vep_info["numero_vep"] = match.group(1)
+                self.log(f"   VEP IVA N°: {vep_info['numero_vep']}")
+
+            # Descargar PDF VEP
+            try:
+                async with self.page.expect_download(timeout=20000) as dl_info:
+                    await self.page.click(
+                        "button:has-text('Descargar VEP'), a:has-text('Descargar VEP'), "
+                        "button:has-text('Descargar'), a:has-text('Descargar')",
+                        timeout=10000
+                    )
+                download = await dl_info.value
+                fname = download.suggested_filename or "VEP_IVA.pdf"
+                path = os.path.join(self.download_dir, fname)
+                await download.save_as(path)
+                vep_info["pdf_path"] = path
+                self.log(f"✅ VEP IVA descargado: {os.path.basename(path)}")
+            except Exception as e:
+                self.log(f"   ⚠️ No se pudo descargar VEP IVA: {e}")
+
+        except Exception as e:
+            self.log(f"   ⚠️ Error generando VEP IVA SETI: {e}")
+
+        return vep_info
 
     # ------------------------------------------------------------------
     async def liquidar(self, anio: int, mes: int,
@@ -979,9 +1717,26 @@ class IVALiquidador(_BaseScraper):
                        cmp_neto_105: float = 0.0, cmp_iva_105: float = 0.0,
                        retenciones: float = 0.0,
                        saldo_favor_1p: float = 0.0,
-                       saldo_favor_2p: float = 0.0) -> dict:
-        """Flujo completo IVA."""
-        resultado = {"resultado": "ok", "vep": None, "posicion": 0.0, "error": None}
+                       saldo_favor_2p: float = 0.0,
+                       medio_pago: str = "qr") -> dict:
+        """
+        Flujo completo IVA con bifurcación saldo a favor / saldo a pagar.
+
+        Retorna dict con:
+          - resultado: "saldo_a_favor" | "saldo_a_pagar" | "error"
+          - posicion: float (positivo = a pagar, negativo = a favor)
+          - pdf_f2051: path al PDF F.2051
+          - vep: dict con numero_vep y pdf_path (solo si saldo a pagar)
+        """
+        resultado = {
+            "resultado": "ok",
+            "posicion": 0.0,
+            "pdf_f2051": None,
+            "vep": None,
+            "error": None,
+            # compatibilidad backward
+            "vep_path": None,
+        }
         try:
             await self.start(headless=HEADLESS)
             await self.login_arca()
@@ -999,21 +1754,30 @@ class IVALiquidador(_BaseScraper):
                 saldo_favor_2p=saldo_favor_2p,
             )
 
-            # Leer posición (saldo a pagar o a favor)
-            try:
-                texto = await self.page.inner_text("body")
-                import re as _re
-                match = _re.search(r"(?:A PAGAR|SALDO)[^\d]*\$?\s*([\d.,]+)", texto, _re.IGNORECASE)
-                if match:
-                    resultado["posicion"] = float(
-                        match.group(1).replace(".", "").replace(",", ".")
-                    )
-            except Exception:
-                pass
-
             await self.enviar_dj()
-            vep = await self.generar_vep()
-            resultado["vep"] = vep
+
+            # Leer posición desde F.2051 / página final
+            importe_a_pagar, saldo_a_favor = await self.leer_posicion_f2051()
+            resultado["posicion"] = importe_a_pagar if importe_a_pagar > 0 else -saldo_a_favor
+
+            # Descargar F.2051
+            pdf_f2051 = await self.descargar_f2051()
+            resultado["pdf_f2051"] = pdf_f2051
+            resultado["vep_path"] = pdf_f2051  # backward compat
+
+            if importe_a_pagar > 0:
+                # CASO B: saldo a pagar → generar VEP en SETI
+                resultado["resultado"] = "saldo_a_pagar"
+                self.log(f"💰 Saldo a pagar IVA: $ {importe_a_pagar:,.2f}")
+                vep = await self.generar_vep_seti(mes, anio, importe_a_pagar, medio_pago)
+                resultado["vep"] = vep
+                if vep.get("pdf_path"):
+                    resultado["vep_path"] = vep["pdf_path"]
+            else:
+                # CASO A: saldo a favor → solo PDF F.2051
+                resultado["resultado"] = "saldo_a_favor"
+                self.log(f"✅ Saldo a favor IVA: $ {saldo_a_favor:,.2f}")
+
         except Exception as e:
             resultado["resultado"] = "error"
             resultado["error"] = str(e)

@@ -58,9 +58,10 @@ COPY . .
 # Crear directorio de output
 RUN mkdir -p output
 
-# Puerto de Railway
+# Puerto por defecto (Railway lo sobreescribe con $PORT)
 ENV PORT=8080
 
 EXPOSE 8080
 
-CMD ["python", "app.py"]
+# Usar /bin/sh para que $PORT se expanda en runtime
+CMD ["/bin/sh", "-c", "gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 300 --keep-alive 5"]

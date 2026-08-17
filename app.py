@@ -23,7 +23,7 @@ from flask import Flask, jsonify, render_template, request, send_file, abort
 from arca_scraper import ARCAScraper
 from arba_scraper import ARBAScraper
 from excel_gen import generar_excel
-from liquidacion_scraper import IIBBLocalLiquidador, COMLiquidador, IVALiquidador
+from liquidacion_scraper import AutonomoLiquidador, IIBBLocalLiquidador, COMLiquidador, IVALiquidador
 
 app = Flask(__name__)
 
@@ -94,6 +94,39 @@ def iniciar():
 # RUTAS DE LIQUIDACIÓN
 # ─────────────────────────────────────────────────────────────────────────────
 
+@app.route("/liquidar-autonomo", methods=["POST"])
+def liquidar_autonomo():
+    """Genera VEP de pago mensual de autónomos en ARCA SETI."""
+    data = request.get_json()
+    cuit      = data.get("cuit", "").strip()
+    password  = data.get("password", "").strip()
+    mes       = int(data.get("mes", 1))
+    anio      = int(data.get("anio", datetime.now().year))
+    categoria = data.get("categoria", "").strip()
+    importe   = data.get("importe")   # None = usa el pre-cargado
+    medio_pago = data.get("medio_pago", "qr").strip()
+
+    if importe is not None:
+        try:
+            importe = float(str(importe).replace(".", "").replace(",", "."))
+        except Exception:
+            importe = None
+
+    if not cuit or not password:
+        return jsonify({"error": "Faltan CUIT y clave fiscal ARCA"}), 400
+    if not categoria:
+        return jsonify({"error": "Falta la categoría de autónomo"}), 400
+
+    session_id = _crear_sesion()
+    t = threading.Thread(
+        target=_run_liquidacion_autonomo,
+        args=(session_id, cuit, password, mes, anio, categoria, importe, medio_pago),
+        daemon=True,
+    )
+    t.start()
+    return jsonify({"session_id": session_id})
+
+
 @app.route("/liquidar-iibb", methods=["POST"])
 def liquidar_iibb():
     """Liquida IIBB Local en ARBA."""
@@ -104,6 +137,7 @@ def liquidar_iibb():
     anio          = int(data.get("anio", datetime.now().year))
     actividades   = data.get("actividades", [{"monto": 0}])
     saldo_ant     = float(data.get("saldo_favor_anterior", 0) or 0)
+    medio_pago    = data.get("medio_pago", "qr").strip()
 
     if not cuit or not password_arba:
         return jsonify({"error": "Faltan CUIT y clave ARBA"}), 400
@@ -111,7 +145,7 @@ def liquidar_iibb():
     session_id = _crear_sesion()
     t = threading.Thread(
         target=_run_liquidacion_iibb,
-        args=(session_id, cuit, password_arba, mes, anio, actividades, saldo_ant),
+        args=(session_id, cuit, password_arba, mes, anio, actividades, saldo_ant, medio_pago),
         daemon=True,
     )
     t.start()
@@ -160,11 +194,12 @@ def liquidar_iva():
         "cmp_neto_21", "cmp_iva_21", "cmp_neto_105", "cmp_iva_105",
         "retenciones", "saldo_favor_1p", "saldo_favor_2p",
     ]}
+    medio_pago = data.get("medio_pago", "qr").strip()
 
     session_id = _crear_sesion()
     t = threading.Thread(
         target=_run_liquidacion_iva,
-        args=(session_id, cuit, password, mes, anio, campos_iva),
+        args=(session_id, cuit, password, mes, anio, campos_iva, medio_pago),
         daemon=True,
     )
     t.start()
@@ -347,7 +382,60 @@ async def _automation(session_id, cuit, password, password_arba, fecha_desde, fe
 # Runners de Liquidación
 # -----------------------------------------------------------------------
 
-def _run_liquidacion_iibb(session_id, cuit, password_arba, mes, anio, actividades, saldo_ant):
+def _run_liquidacion_autonomo(session_id, cuit, password, mes, anio,
+                               categoria, importe, medio_pago):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    log = lambda msg: _log(session_id, msg)
+    try:
+        _set_progreso(session_id, 5)
+        log(f"👤 Iniciando pago Autónomo — {mes:02d}/{anio}")
+        log(f"   Categoría: {categoria}")
+        if importe:
+            log(f"   Importe: $ {importe:,.2f}")
+        else:
+            log("   Importe: usa el máximo pre-cargado")
+        log(f"   Medio de pago: {medio_pago}")
+
+        liq = AutonomoLiquidador(cuit, password, log_fn=log, download_dir=OUTPUT_DIR)
+        _set_progreso(session_id, 10)
+
+        resultado = loop.run_until_complete(
+            liq.pagar_autonomo(
+                mes=mes,
+                anio=anio,
+                categoria=categoria,
+                importe=importe,
+                medio_pago=medio_pago,
+            )
+        )
+
+        _set_progreso(session_id, 100)
+        if resultado["resultado"] == "ok":
+            sessions[session_id]["estado"]  = "completado"
+            sessions[session_id]["archivo"] = resultado.get("pdf_path")
+            numero_vep = resultado.get("numero_vep", "—")
+            importe_real = resultado.get("importe")
+            if importe_real:
+                log(f"💰 VEP generado — N°: {numero_vep} — Importe: $ {importe_real:,.2f}")
+            else:
+                log(f"💰 VEP generado — N°: {numero_vep}")
+            log("📄 Descargá el VEP con el botón de abajo.")
+        else:
+            sessions[session_id]["estado"] = "error"
+            sessions[session_id]["error"]  = resultado.get("error")
+            log(f"❌ {resultado.get('error')}")
+
+    except Exception as e:
+        sessions[session_id]["estado"] = "error"
+        sessions[session_id]["error"]  = str(e)
+        log(f"❌ Error fatal Autónomo: {e}")
+    finally:
+        loop.close()
+
+
+def _run_liquidacion_iibb(session_id, cuit, password_arba, mes, anio, actividades, saldo_ant,
+                           medio_pago="qr"):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     log = lambda msg: _log(session_id, msg)
@@ -366,19 +454,27 @@ def _run_liquidacion_iibb(session_id, cuit, password_arba, mes, anio, actividade
                 actividades=actividades,
                 saldo_favor_anterior=saldo_ant,
                 password_arba=password_arba,
+                medio_pago=medio_pago,
             )
         )
 
         _set_progreso(session_id, 100)
-        if resultado["resultado"] == "ok":
-            sessions[session_id]["estado"]  = "completado"
-            sessions[session_id]["archivo"] = resultado.get("comprobante")
-            a_pagar = resultado.get("a_pagar", 0)
-            if a_pagar > 0:
-                log(f"💰 Impuesto a pagar: ${a_pagar:,.2f}")
+        res_tipo = resultado.get("resultado", "ok")
+        if res_tipo in ("ok", "saldo_a_favor", "saldo_a_pagar"):
+            sessions[session_id]["estado"] = "completado"
+            # Archivo principal: VEP (si hay) o comprobante R-606M
+            vep = resultado.get("vep") or {}
+            archivo = vep.get("pdf_path") or resultado.get("comprobante")
+            sessions[session_id]["archivo"] = archivo
+            if res_tipo == "saldo_a_pagar":
+                a_pagar = resultado.get("a_pagar", 0)
+                vep_nro = vep.get("numero_vep", "—")
+                log(f"💰 Saldo a pagar: ${a_pagar:,.2f} — VEP N°: {vep_nro}")
+                log("📄 Descargá el VEP con el botón de abajo.")
             else:
-                log("✅ DJ presentada sin saldo a pagar (saldo a favor)")
-            log("📄 Descargá el comprobante con el botón de abajo.")
+                a_favor = resultado.get("a_favor", 0)
+                log(f"✅ Saldo a favor del contribuyente: ${a_favor:,.2f}")
+                log("📄 Descargá el comprobante R-606M con el botón de abajo.")
         else:
             sessions[session_id]["estado"] = "error"
             sessions[session_id]["error"]  = resultado.get("error")
@@ -429,7 +525,7 @@ def _run_liquidacion_com(session_id, cuit, password, mes, anio, base_caba, base_
         loop.close()
 
 
-def _run_liquidacion_iva(session_id, cuit, password, mes, anio, campos):
+def _run_liquidacion_iva(session_id, cuit, password, mes, anio, campos, medio_pago="qr"):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     log = lambda msg: _log(session_id, msg)
@@ -446,16 +542,25 @@ def _run_liquidacion_iva(session_id, cuit, password, mes, anio, campos):
         _set_progreso(session_id, 10)
 
         resultado = loop.run_until_complete(
-            liq.liquidar(anio=anio, mes=mes, **campos)
+            liq.liquidar(anio=anio, mes=mes, **campos, medio_pago=medio_pago)
         )
 
         _set_progreso(session_id, 100)
-        if resultado["resultado"] == "ok":
+        res_tipo = resultado.get("resultado", "ok")
+        if res_tipo in ("ok", "saldo_a_favor", "saldo_a_pagar"):
             sessions[session_id]["estado"]  = "completado"
-            sessions[session_id]["archivo"] = resultado.get("vep")
+            # Archivo: VEP si hay saldo a pagar, F.2051 si hay saldo a favor
+            vep = resultado.get("vep") or {}
+            archivo = vep.get("pdf_path") or resultado.get("pdf_f2051") or resultado.get("vep_path")
+            sessions[session_id]["archivo"] = archivo
             posicion = resultado.get("posicion", 0)
-            log(f"💰 Posición IVA liquidada: ${posicion:,.2f}")
-            log("📄 Descargá el VEP con el botón de abajo.")
+            if res_tipo == "saldo_a_pagar":
+                vep_nro = vep.get("numero_vep", "—")
+                log(f"💰 Saldo a pagar IVA: ${posicion:,.2f} — VEP N°: {vep_nro}")
+                log("📄 Descargá el VEP con el botón de abajo.")
+            else:
+                log(f"✅ Saldo a favor IVA: ${abs(posicion):,.2f}")
+                log("📄 Descargá el F.2051 con el botón de abajo.")
         else:
             sessions[session_id]["estado"] = "error"
             sessions[session_id]["error"]  = resultado.get("error")

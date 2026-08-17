@@ -285,6 +285,51 @@
       color: #0369a1;
       font-weight: 600;
     }
+
+    /* ── Medios de pago ── */
+    .medios-pago {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 6px;
+    }
+    .medio-btn {
+      flex: 1;
+      min-width: 80px;
+      padding: 10px 8px 8px;
+      border: 2px solid #cdd5e0;
+      border-radius: 9px;
+      background: #fafbfc;
+      cursor: pointer;
+      text-align: center;
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: #444;
+      transition: border-color 0.15s, background 0.15s;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 5px;
+    }
+    .medio-btn .medio-icon { font-size: 1.4rem; }
+    .medio-btn:hover { border-color: #2563eb; background: #eff6ff; color: #1e40af; }
+    .medio-btn.selected {
+      border-color: #2563eb;
+      background: #dbeafe;
+      color: #1e40af;
+    }
+    .medios-label {
+      font-size: 0.80rem;
+      font-weight: 600;
+      color: #444;
+      margin-bottom: 4px;
+      display: block;
+    }
+    .medios-hint {
+      font-size: 0.71rem;
+      color: #888;
+      margin-top: 5px;
+    }
   </style>
 </head>
 <body>
@@ -293,22 +338,150 @@
   <div class="header">
     <div>
       <h1>📑 Liquidaciones Impositivas</h1>
-      <p>IIBB Local (ARBA) · Convenio Multilateral (SIFERE) · IVA (ARCA)</p>
+      <p>Autónomo · IIBB Local (ARBA) · Convenio Multilateral (SIFERE) · IVA (ARCA)</p>
     </div>
     <a href="/" class="btn-back">← Libros IVA</a>
   </div>
 
   <!-- Tabs -->
   <div class="tabs">
-    <button class="tab-btn active" onclick="showTab('iibb', this)">🏛️ IIBB Local</button>
+    <button class="tab-btn active" onclick="showTab('aut',  this)">👤 Autónomo</button>
+    <button class="tab-btn"        onclick="showTab('iibb', this)">🏛️ IIBB Local</button>
     <button class="tab-btn"        onclick="showTab('com',  this)">🗺️ Conv. Multilateral</button>
     <button class="tab-btn"        onclick="showTab('iva',  this)">🧾 IVA</button>
   </div>
 
   <!-- ══════════════════════════════════════════════════════
+       TAB 0 · AUTÓNOMO — ARCA SETI
+  ══════════════════════════════════════════════════════ -->
+  <div id="tab-aut" class="tab-panel active">
+    <div class="alert-warning">⚠️ Se abrirá un navegador en ARCA (SETI) para generar el VEP. No lo cierres mientras se procesa.</div>
+
+    <form id="form-aut" onsubmit="iniciarLiquidacion(event,'aut')">
+
+      <div class="section-title">Credenciales ARCA (Clave Fiscal)</div>
+      <div class="row">
+        <div class="col w50">
+          <label>CUIT</label>
+          <input type="text" id="aut-cuit" class="cuit-input" placeholder="20-12345678-9" maxlength="13" required />
+        </div>
+        <div class="col w50">
+          <label>Clave Fiscal ARCA</label>
+          <input type="password" id="aut-password" placeholder="••••••••" required />
+        </div>
+      </div>
+
+      <hr class="separator" />
+      <div class="section-title">Período</div>
+      <div class="row">
+        <div class="col w50">
+          <label>Mes</label>
+          <select id="aut-mes">
+            <option value="1">Enero</option><option value="2">Febrero</option>
+            <option value="3">Marzo</option><option value="4">Abril</option>
+            <option value="5">Mayo</option><option value="6">Junio</option>
+            <option value="7">Julio</option><option value="8">Agosto</option>
+            <option value="9">Septiembre</option><option value="10">Octubre</option>
+            <option value="11">Noviembre</option><option value="12">Diciembre</option>
+          </select>
+        </div>
+        <div class="col w50">
+          <label>Año</label>
+          <input type="number" id="aut-anio" min="2020" max="2035" value="2026" />
+        </div>
+      </div>
+
+      <hr class="separator" />
+      <div class="section-title">Categoría de Autónomo</div>
+      <div class="row">
+        <div class="col full">
+          <label>Categoría / CRA</label>
+          <select id="aut-categoria" required>
+            <option value="">— Seleccioná tu categoría —</option>
+            <optgroup label="Categoría T1">
+              <option value="101: T1 Cat I">101: T1 Cat I</option>
+              <option value="102: T1 Cat II">102: T1 Cat II</option>
+              <option value="103: T1 Cat III">103: T1 Cat III</option>
+            </optgroup>
+            <optgroup label="Categoría T2">
+              <option value="201: T2 Cat I">201: T2 Cat I</option>
+              <option value="202: T2 Cat II">202: T2 Cat II</option>
+              <option value="203: T2 Cat III">203: T2 Cat III</option>
+            </optgroup>
+            <optgroup label="Categoría T3">
+              <option value="301: T3 Cat I">301: T3 Cat I — Ingresos hasta $25.000</option>
+              <option value="302: T3 Cat II">302: T3 Cat II — Ingresos hasta $50.000</option>
+              <option value="303: T3 Cat III">303: T3 Cat III — Ingresos hasta $75.000</option>
+            </optgroup>
+            <optgroup label="Categoría T4">
+              <option value="401: T4 Cat I">401: T4 Cat I</option>
+              <option value="402: T4 Cat II">402: T4 Cat II</option>
+              <option value="403: T4 Cat III">403: T4 Cat III</option>
+            </optgroup>
+            <optgroup label="Categoría T5">
+              <option value="501: T5 Cat I">501: T5 Cat I</option>
+              <option value="502: T5 Cat II">502: T5 Cat II</option>
+              <option value="503: T5 Cat III">503: T5 Cat III</option>
+            </optgroup>
+            <optgroup label="CRA — Aportes Reales">
+              <option value="CRA">CRA — Aportes reales</option>
+            </optgroup>
+          </select>
+          <div class="hint">
+            ⚠️ Las categorías exactas las asigna ARCA según tus ingresos. El sistema tomará la del portal si no coincide exactamente con la seleccionada acá.
+          </div>
+        </div>
+      </div>
+
+      <hr class="separator" />
+      <div class="section-title">Importe (Opcional)</div>
+      <div class="row">
+        <div class="col full">
+          <label>Aportes Seg. Social Autónomos — Código 308 ($)</label>
+          <input type="text" id="aut-importe" placeholder="Dejar vacío para usar el máximo pre-cargado" />
+          <div class="hint">Si lo dejás en blanco, el sistema usa el importe máximo que carga ARCA automáticamente según tu categoría.</div>
+        </div>
+      </div>
+
+      <hr class="separator" />
+      <div class="section-title">Medio de Pago</div>
+      <span class="medios-label">Seleccioná cómo vas a pagar el VEP:</span>
+      <div class="medios-pago" id="aut-medios">
+        <button type="button" class="medio-btn selected" data-medio="qr" onclick="selMedio('aut','qr',this)">
+          <span class="medio-icon">📱</span>Pago con QR
+        </button>
+        <button type="button" class="medio-btn" data-medio="pagar" onclick="selMedio('aut','pagar',this)">
+          <span class="medio-icon">💳</span>Pagar
+        </button>
+        <button type="button" class="medio-btn" data-medio="pagomiscuentas" onclick="selMedio('aut','pagomiscuentas',this)">
+          <span class="medio-icon">🏦</span>PagoMisCuentas
+        </button>
+        <button type="button" class="medio-btn" data-medio="interbanking" onclick="selMedio('aut','interbanking',this)">
+          <span class="medio-icon">🔗</span>Interbanking
+        </button>
+        <button type="button" class="medio-btn" data-medio="xngroup" onclick="selMedio('aut','xngroup',this)">
+          <span class="medio-icon">🌐</span>XN Group
+        </button>
+      </div>
+      <input type="hidden" id="aut-medio-pago" value="qr" />
+      <div class="medios-hint">Podés cambiar el medio de pago después desde el portal de ARCA.</div>
+
+      <button type="submit" class="btn-primary" id="btn-aut">▶ Generar VEP Autónomo</button>
+    </form>
+
+    <div class="progress-section" id="prog-aut">
+      <div id="badge-aut" class="status-badge badge-procesando">⏳ Procesando...</div>
+      <div class="progress-pct"><span id="pct-aut">0%</span></div>
+      <div class="progress-bar-bg"><div class="progress-bar-fill" id="fill-aut"></div></div>
+      <div class="log-box" id="log-aut"></div>
+      <a id="dl-aut" class="btn-download" href="#">⬇ Descargar VEP Autónomo (PDF)</a>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════
        TAB 1 · IIBB LOCAL — ARBA
   ══════════════════════════════════════════════════════ -->
-  <div id="tab-iibb" class="tab-panel active">
+  <div id="tab-iibb" class="tab-panel">
     <div class="alert-warning">⚠️ Se abrirá un navegador en ARBA. No lo cierres mientras se procesa.</div>
 
     <form id="form-iibb" onsubmit="iniciarLiquidacion(event,'iibb')">
@@ -368,6 +541,28 @@
           <div class="hint">Ingresá 0 si no hay saldo a favor acumulado</div>
         </div>
       </div>
+
+      <hr class="separator" />
+      <div class="section-title">Medio de Pago (si hay saldo a pagar)</div>
+      <span class="medios-label">Se usa solo si la DJ arroja saldo a pagar:</span>
+      <div class="medios-pago" id="iibb-medios">
+        <button type="button" class="medio-btn selected" data-medio="qr" onclick="selMedio('iibb','qr',this)">
+          <span class="medio-icon">📱</span>Pago con QR
+        </button>
+        <button type="button" class="medio-btn" data-medio="pagar" onclick="selMedio('iibb','pagar',this)">
+          <span class="medio-icon">💳</span>Pagar
+        </button>
+        <button type="button" class="medio-btn" data-medio="pagomiscuentas" onclick="selMedio('iibb','pagomiscuentas',this)">
+          <span class="medio-icon">🏦</span>PagoMisCuentas
+        </button>
+        <button type="button" class="medio-btn" data-medio="interbanking" onclick="selMedio('iibb','interbanking',this)">
+          <span class="medio-icon">🔗</span>Interbanking
+        </button>
+        <button type="button" class="medio-btn" data-medio="xngroup" onclick="selMedio('iibb','xngroup',this)">
+          <span class="medio-icon">🌐</span>XN Group
+        </button>
+      </div>
+      <input type="hidden" id="iibb-medio-pago" value="qr" />
 
       <button type="submit" class="btn-primary" id="btn-iibb">▶ Liquidar IIBB Local</button>
     </form>
@@ -594,7 +789,29 @@
         Débito fiscal: $0,00 &nbsp;|&nbsp; Crédito fiscal: $0,00 &nbsp;|&nbsp; Posición estimada: $0,00
       </div>
 
-      <button type="submit" class="btn-primary" id="btn-iva">▶ Liquidar IVA y generar VEP</button>
+      <hr class="separator" />
+      <div class="section-title">Medio de Pago (si hay saldo a pagar)</div>
+      <span class="medios-label">Se usa solo si la posición IVA arroja saldo a pagar:</span>
+      <div class="medios-pago" id="iva-medios">
+        <button type="button" class="medio-btn selected" data-medio="qr" onclick="selMedio('iva','qr',this)">
+          <span class="medio-icon">📱</span>Pago con QR
+        </button>
+        <button type="button" class="medio-btn" data-medio="pagar" onclick="selMedio('iva','pagar',this)">
+          <span class="medio-icon">💳</span>Pagar
+        </button>
+        <button type="button" class="medio-btn" data-medio="pagomiscuentas" onclick="selMedio('iva','pagomiscuentas',this)">
+          <span class="medio-icon">🏦</span>PagoMisCuentas
+        </button>
+        <button type="button" class="medio-btn" data-medio="interbanking" onclick="selMedio('iva','interbanking',this)">
+          <span class="medio-icon">🔗</span>Interbanking
+        </button>
+        <button type="button" class="medio-btn" data-medio="xngroup" onclick="selMedio('iva','xngroup',this)">
+          <span class="medio-icon">🌐</span>XN Group
+        </button>
+      </div>
+      <input type="hidden" id="iva-medio-pago" value="qr" />
+
+      <button type="submit" class="btn-primary" id="btn-iva">▶ Liquidar IVA</button>
     </form>
 
     <div class="progress-section" id="prog-iva">
@@ -617,6 +834,15 @@ function showTab(id, btn) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-' + id).classList.add('active');
   btn.classList.add('active');
+}
+
+// ───────────────────────────────────────────────────────
+// Selector de medio de pago
+// ───────────────────────────────────────────────────────
+function selMedio(tipo, medio, btn) {
+  document.querySelectorAll('#' + tipo + '-medios .medio-btn').forEach(b => b.classList.remove('selected'));
+  btn.classList.add('selected');
+  document.getElementById(tipo + '-medio-pago').value = medio;
 }
 
 // ───────────────────────────────────────────────────────
@@ -708,9 +934,9 @@ function formatMonto(n) {
 // ───────────────────────────────────────────────────────
 // Envío de formularios
 // ───────────────────────────────────────────────────────
-const sessions = { iibb: null, com: null, iva: null };
-const pollings  = { iibb: null, com: null, iva: null };
-const logCounts = { iibb: 0,    com: 0,    iva: 0    };
+const sessions = { aut: null, iibb: null, com: null, iva: null };
+const pollings  = { aut: null, iibb: null, com: null, iva: null };
+const logCounts = { aut: 0,    iibb: 0,   com: 0,    iva: 0    };
 
 async function iniciarLiquidacion(e, tipo) {
   e.preventDefault();
@@ -724,7 +950,18 @@ async function iniciarLiquidacion(e, tipo) {
 
   let payload = {};
 
-  if (tipo === 'iibb') {
+  if (tipo === 'aut') {
+    const importeRaw = document.getElementById('aut-importe').value.trim();
+    payload = {
+      cuit:       document.getElementById('aut-cuit').value,
+      password:   document.getElementById('aut-password').value,
+      mes:        document.getElementById('aut-mes').value,
+      anio:       document.getElementById('aut-anio').value,
+      categoria:  document.getElementById('aut-categoria').value,
+      importe:    importeRaw ? parseMonto(importeRaw) : null,
+      medio_pago: document.getElementById('aut-medio-pago').value,
+    };
+  } else if (tipo === 'iibb') {
     const actividades = [];
     document.querySelectorAll('#iibb-actividades .act-row').forEach(row => {
       const cod   = row.querySelector('.iibb-cod').value.trim();
@@ -738,6 +975,7 @@ async function iniciarLiquidacion(e, tipo) {
       anio:              document.getElementById('iibb-anio').value,
       actividades,
       saldo_favor_anterior: parseMonto(document.getElementById('iibb-saldo-anterior').value),
+      medio_pago: document.getElementById('iibb-medio-pago').value,
     };
   } else if (tipo === 'com') {
     payload = {
@@ -769,6 +1007,7 @@ async function iniciarLiquidacion(e, tipo) {
       retenciones:      parseMonto(document.getElementById('iva-retenciones').value),
       saldo_favor_1p:   parseMonto(document.getElementById('iva-saldo1p').value),
       saldo_favor_2p:   parseMonto(document.getElementById('iva-saldo2p').value),
+      medio_pago:       document.getElementById('iva-medio-pago').value,
     };
   }
 
@@ -857,10 +1096,10 @@ function resetBtn(tipo, done = false) {
 const hoy     = new Date();
 const mesPrev = hoy.getMonth() === 0 ? 12 : hoy.getMonth();
 const anioPrev = hoy.getMonth() === 0 ? hoy.getFullYear() - 1 : hoy.getFullYear();
-['iibb-mes','com-mes','iva-mes'].forEach(id => {
+['aut-mes','iibb-mes','com-mes','iva-mes'].forEach(id => {
   document.getElementById(id).value = mesPrev;
 });
-['iibb-anio','com-anio','iva-anio'].forEach(id => {
+['aut-anio','iibb-anio','com-anio','iva-anio'].forEach(id => {
   document.getElementById(id).value = anioPrev;
 });
 </script>
