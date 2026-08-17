@@ -1449,6 +1449,8 @@ class IVALiquidador(_BaseScraper):
                            vta_ri_iva_21:  float = 0.0,
                            vta_ri_neto_105: float = 0.0,
                            vta_ri_iva_105:  float = 0.0,
+                           # VENTAS EXENTAS / NO GRAVADAS
+                           vta_exentas: float = 0.0,
                            # COMPRAS
                            cmp_neto_21: float = 0.0,
                            cmp_iva_21:  float = 0.0,
@@ -1463,14 +1465,21 @@ class IVALiquidador(_BaseScraper):
 
         ARCA divide la pantalla en varias secciones:
           1. Ventas y/u operaciones gravadas (separadas por alícuota)
-          2. Compras, locaciones y prestaciones gravadas
-          3. Retenciones / Percepciones sufridas
-          4. Saldos a favor períodos anteriores
+          2. Ventas exentas, no gravadas y operaciones no alcanzadas
+          3. Compras, locaciones y prestaciones gravadas
+          4. Retenciones / Percepciones sufridas
+          5. Saldos a favor períodos anteriores
+
+        vta_exentas: importe total de ventas exentas / no gravadas.
+          No genera débito fiscal (IVA = 0) pero ARCA lo requiere para
+          cuadrar el total de ventas del período (F.2051, rubro exentas).
         """
         debito_total = vta_cf_iva_21 + vta_cf_iva_105 + vta_ri_iva_21 + vta_ri_iva_105
         credito_total = cmp_iva_21 + cmp_iva_105
         self.log(
-            f"📊 Completando DJ IVA — Débito: ${debito_total:,.2f} | Crédito: ${credito_total:,.2f}"
+            f"📊 Completando DJ IVA — Débito: ${debito_total:,.2f} | "
+            f"Crédito: ${credito_total:,.2f}"
+            + (f" | Exentas: ${vta_exentas:,.2f}" if vta_exentas > 0 else "")
         )
 
         # Mapa de campos: (valor, selectores posibles en la página ARCA)
@@ -1496,6 +1505,12 @@ class IVALiquidador(_BaseScraper):
                                 "input[name*='vri'][name*='105'][name*='neto']"]),
             (vta_ri_iva_105,  ["iva105RI",
                                 "input[name*='vri'][name*='105'][name*='iva']"]),
+            # Ventas Exentas / No Gravadas / No Alcanzadas (sin IVA)
+            # ARCA F.2051: "Ventas exentas, no gravadas y operaciones no alcanzadas"
+            (vta_exentas,     ["ventasExentas", "exentas", "noGravadas", "noAlcanzadas",
+                                "input[name*='exent']", "input[id*='exent']",
+                                "input[name*='nograv']", "input[id*='nograv']",
+                                "input[name*='noAlc']", "input[id*='noAlc']"]),
             # Compras 21%
             (cmp_neto_21,     ["netoCompra21", "compras21neto",
                                 "input[name*='cmp'][name*='21'][name*='neto']"]),
@@ -1795,6 +1810,7 @@ class IVALiquidador(_BaseScraper):
                        vta_cf_neto_105: float = 0.0, vta_cf_iva_105: float = 0.0,
                        vta_ri_neto_21: float = 0.0, vta_ri_iva_21: float = 0.0,
                        vta_ri_neto_105: float = 0.0, vta_ri_iva_105: float = 0.0,
+                       vta_exentas: float = 0.0,
                        cmp_neto_21: float = 0.0, cmp_iva_21: float = 0.0,
                        cmp_neto_105: float = 0.0, cmp_iva_105: float = 0.0,
                        retenciones: float = 0.0,
@@ -1829,6 +1845,7 @@ class IVALiquidador(_BaseScraper):
                 vta_cf_neto_105=vta_cf_neto_105, vta_cf_iva_105=vta_cf_iva_105,
                 vta_ri_neto_21=vta_ri_neto_21, vta_ri_iva_21=vta_ri_iva_21,
                 vta_ri_neto_105=vta_ri_neto_105, vta_ri_iva_105=vta_ri_iva_105,
+                vta_exentas=vta_exentas,
                 cmp_neto_21=cmp_neto_21, cmp_iva_21=cmp_iva_21,
                 cmp_neto_105=cmp_neto_105, cmp_iva_105=cmp_iva_105,
                 retenciones=retenciones,

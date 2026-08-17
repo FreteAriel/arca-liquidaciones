@@ -221,6 +221,7 @@ def liquidar_iva():
     campos_iva = {k: float(data.get(k, 0) or 0) for k in [
         "vta_cf_neto_21", "vta_cf_iva_21", "vta_cf_neto_105", "vta_cf_iva_105",
         "vta_ri_neto_21", "vta_ri_iva_21", "vta_ri_neto_105", "vta_ri_iva_105",
+        "vta_exentas",
         "cmp_neto_21", "cmp_iva_21", "cmp_neto_105", "cmp_iva_105",
         "retenciones", "saldo_favor_1p", "saldo_favor_2p",
     ]}
@@ -564,8 +565,11 @@ def _run_liquidacion_iva(session_id, cuit, password, mes, anio, campos, medio_pa
         debito  = campos["vta_cf_iva_21"] + campos["vta_cf_iva_105"] + \
                   campos["vta_ri_iva_21"] + campos["vta_ri_iva_105"]
         credito = campos["cmp_iva_21"] + campos["cmp_iva_105"]
+        exentas = campos.get("vta_exentas", 0.0)
         log(f"🧾 Iniciando liquidación IVA — {mes:02d}/{anio}")
         log(f"   Débito fiscal: ${debito:,.2f} | Crédito fiscal: ${credito:,.2f}")
+        if exentas > 0:
+            log(f"   Ventas exentas / no gravadas: ${exentas:,.2f}")
         log(f"   Posición estimada: ${debito - credito:,.2f}")
 
         liq = IVALiquidador(cuit, password, log_fn=log, download_dir=OUTPUT_DIR)

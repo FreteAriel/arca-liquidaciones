@@ -739,6 +739,22 @@
         </div>
       </div>
 
+      <!-- VENTAS EXENTAS / NO GRAVADAS -->
+      <div class="field-group">
+        <div class="field-group-title">🔵 Ventas Exentas / No Gravadas / No Alcanzadas</div>
+        <div class="row">
+          <div class="col full">
+            <label>Importe total de ventas exentas ($)</label>
+            <input type="text" id="iva-exentas" placeholder="0,00" value="0" />
+            <div class="hint">
+              Incluye: ventas exentas de IVA, operaciones no gravadas y no alcanzadas.
+              No genera débito fiscal pero ARCA la requiere en el F.2051.
+              Caso típico: venta exenta (Art. 7° Ley IVA), exportaciones, etc.
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- COMPRAS -->
       <div class="field-group">
         <div class="field-group-title">🛒 Compras / Crédito Fiscal</div>
@@ -896,6 +912,7 @@ function actualizarTotalCOM() {
 const ivaFields = [
   'iva-vcf-neto21','iva-vcf-iva21','iva-vcf-neto105','iva-vcf-iva105',
   'iva-vri-neto21','iva-vri-iva21','iva-vri-neto105','iva-vri-iva105',
+  'iva-exentas',
   'iva-cmp-neto21','iva-cmp-iva21','iva-cmp-neto105','iva-cmp-iva105',
   'iva-retenciones','iva-saldo1p','iva-saldo2p',
 ];
@@ -1000,6 +1017,7 @@ async function iniciarLiquidacion(e, tipo) {
       vta_ri_iva_21:    parseMonto(document.getElementById('iva-vri-iva21').value),
       vta_ri_neto_105:  parseMonto(document.getElementById('iva-vri-neto105').value),
       vta_ri_iva_105:   parseMonto(document.getElementById('iva-vri-iva105').value),
+      vta_exentas:      parseMonto(document.getElementById('iva-exentas').value),
       cmp_neto_21:      parseMonto(document.getElementById('iva-cmp-neto21').value),
       cmp_iva_21:       parseMonto(document.getElementById('iva-cmp-iva21').value),
       cmp_neto_105:     parseMonto(document.getElementById('iva-cmp-neto105').value),
