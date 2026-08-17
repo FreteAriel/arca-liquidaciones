@@ -604,10 +604,52 @@ class IIBBLocalLiquidador(_BaseScraper):
         self.log(f"✅ DJ iniciada para {mes:02d}/{anio}")
 
     # ------------------------------------------------------------------
+    @staticmethod
+    def calcular_bases_metodologia(
+        neto_21: float,
+        neto_10_5: float = 0.0,
+        pct_bebidas: float = 0.40,
+        cod_alimentos: str = "463199",
+        cod_bebidas: str = "463219",
+    ) -> list:
+        """
+        Calcula las bases imponibles para contribuyentes con metodología
+        alimentos/bebidas (ej.: Andriuolo — 60% alimentos / 40% bebidas).
+
+        Parámetros:
+            neto_21      : base gravada al 21% (ventas de alimentos + bebidas)
+            neto_10_5    : base gravada al 10.5% (suele ser todo alimentos)
+            pct_bebidas  : proporción de bebidas sobre el neto_21 (default 0.40)
+            cod_alimentos: código ARBA de la actividad alimentos (default 463199)
+            cod_bebidas  : código ARBA de la actividad bebidas   (default 463219)
+
+        Retorna lista de dicts lista para pasarle a cargar_actividades().
+
+        Ejemplo:
+            bases = IIBBLocalLiquidador.calcular_bases_metodologia(
+                neto_21=500_000, neto_10_5=200_000
+            )
+            # → [{"codigo": "463199", "monto": 500000.0},
+            #    {"codigo": "463219", "monto": 200000.0}]
+        """
+        pct_alimentos = 1.0 - pct_bebidas
+        base_alimentos = round(pct_alimentos * neto_21 + neto_10_5)
+        base_bebidas   = round(pct_bebidas   * neto_21)
+        return [
+            {"codigo": cod_alimentos, "monto": float(base_alimentos)},
+            {"codigo": cod_bebidas,   "monto": float(base_bebidas)},
+        ]
+
+    # ------------------------------------------------------------------
     async def cargar_actividades(self, actividades: list):
         """
         Carga el monto imponible en cada actividad de la DJ.
-        actividades: list[dict] con 'monto' (float)
+        actividades: list[dict] con claves:
+            'codigo'  (str) — código ARBA de la actividad (recomendado)
+            'monto'   (float) — base imponible gravada
+        Si se informa el código se busca la fila correspondiente en la tabla
+        de actividades; si no se encuentra (o no hay código) se usa la
+        posición como fallback.
         """
         self.log(f"📊 Cargando {len(actividades)} actividad(es)...")
 
@@ -623,39 +665,69 @@ class IIBBLocalLiquidador(_BaseScraper):
             pass
 
         for i, act in enumerate(actividades):
-            monto = float(act.get("monto", 0))
-            codigo = act.get("codigo", f"actividad {i+1}")
-            self.log(f"   Actividad {codigo}: $ {monto:,.2f}")
+            monto  = float(act.get("monto", 0))
+            codigo = str(act.get("codigo", "")).strip()
+            label  = codigo if codigo else f"actividad {i+1}"
+            self.log(f"   Actividad {label}: $ {monto:,.2f}")
 
             try:
-                # Buscar botón "Carga de la DJ" o el ícono de editar de cada fila
-                carga_links = await self.page.query_selector_all(
-                    "a:has-text('Carga de la DJ'), a:has-text('Modificar'), "
-                    "img[title*='Editar'], button:has-text('Carga')"
+                link_encontrado = None
+
+                # ── Estrategia A: buscar la fila que contiene el código ARBA ──
+                if codigo:
+                    filas = await self.page.query_selector_all("tr")
+                    for fila in filas:
+                        texto_fila = (await fila.inner_text()).strip()
+                        if codigo in texto_fila:
+                            link = await fila.query_selector(
+                                "a:has-text('Carga de la DJ'), "
+                                "a:has-text('Modificar'), "
+                                "img[title*='Editar'], "
+                                "a[href*='admActividad']"
+                            )
+                            if link:
+                                link_encontrado = link
+                                self.log(f"      → fila encontrada por código {codigo}")
+                                break
+
+                # ── Estrategia B: fallback por posición ──────────────────────
+                if not link_encontrado:
+                    todos_links = await self.page.query_selector_all(
+                        "a:has-text('Carga de la DJ'), a:has-text('Modificar'), "
+                        "img[title*='Editar'], button:has-text('Carga')"
+                    )
+                    if i < len(todos_links):
+                        link_encontrado = todos_links[i]
+                        self.log(f"      → usando posición {i} como fallback")
+
+                if not link_encontrado:
+                    self.log(f"   ⚠️ No se encontró link para {label}")
+                    continue
+
+                await link_encontrado.click()
+                await self.page.wait_for_load_state("networkidle", timeout=15000)
+
+                # Ingresar monto imponible
+                campo_monto = await self.page.query_selector(
+                    "input[name*='monto'], input[name*='imponible'], "
+                    "input[id*='monto'], input[id*='imponible'], "
+                    "input[class*='monto']"
                 )
-                if i < len(carga_links):
-                    await carga_links[i].click()
-                    await self.page.wait_for_load_state("networkidle", timeout=15000)
+                if campo_monto:
+                    monto_fmt = f"{monto:.2f}".replace(".", ",")
+                    await campo_monto.triple_click()
+                    await campo_monto.fill(monto_fmt)
 
-                    # Ingresar monto imponible
-                    campo_monto = await self.page.query_selector(
-                        "input[name*='monto'], input[name*='imponible'], "
-                        "input[id*='monto'], input[id*='imponible'], "
-                        "input[class*='monto']"
-                    )
-                    if campo_monto:
-                        await campo_monto.triple_click()
-                        await campo_monto.fill(str(monto).replace(".", ","))
+                # Confirmar
+                await self.page.click(
+                    "button:has-text('Modificar'), button:has-text('Guardar'), "
+                    "input[value*='Modificar'], input[value*='Guardar']"
+                )
+                await self.page.wait_for_load_state("networkidle", timeout=15000)
+                self.log(f"   ✅ {label} cargada")
 
-                    # Confirmar
-                    await self.page.click(
-                        "button:has-text('Modificar'), button:has-text('Guardar'), "
-                        "input[value*='Modificar'], input[value*='Guardar']"
-                    )
-                    await self.page.wait_for_load_state("networkidle", timeout=15000)
-                    self.log(f"   ✅ Actividad {i+1} cargada")
             except Exception as e:
-                self.log(f"   ⚠️ No se pudo cargar actividad {i+1}: {e}")
+                self.log(f"   ⚠️ No se pudo cargar {label}: {e}")
 
     # ------------------------------------------------------------------
     async def cerrar_dj(self, saldo_favor_anterior: float = 0.0):
@@ -722,8 +794,15 @@ class IIBBLocalLiquidador(_BaseScraper):
                     "input[placeholder*='saldo'], input[placeholder*='Saldo']"
                 )
                 if campo_saldo:
+                    # Formatear como "1.234,56" (separador de miles punto, decimal coma)
+                    saldo_fmt = (
+                        f"{saldo_favor_anterior:,.2f}"
+                        .replace(",", "X")
+                        .replace(".", ",")
+                        .replace("X", ".")
+                    )
                     await campo_saldo.triple_click()
-                    await campo_saldo.fill(str(saldo_favor_anterior).replace(".", ","))
+                    await campo_saldo.fill(saldo_fmt)
                     self.log(f"   Saldo a favor anterior: $ {saldo_favor_anterior:,.2f}")
                     try:
                         await self.page.click(
