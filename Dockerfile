@@ -17,7 +17,6 @@ RUN apt-get update && apt-get install -y \
     libexpat1 \
     libfontconfig1 \
     libgbm1 \
-    libgcc1 \
     libglib2.0-0 \
     libgtk-3-0 \
     libnspr4 \
@@ -58,10 +57,7 @@ COPY . .
 # Crear directorio de output
 RUN mkdir -p output
 
-# Puerto por defecto (Railway lo sobreescribe con $PORT)
-ENV PORT=8080
-
 EXPOSE 8080
 
-# Usar /bin/sh para que $PORT se expanda en runtime
-CMD ["/bin/sh", "-c", "gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 300 --keep-alive 5"]
+# Forma shell: Docker la ejecuta via /bin/sh -c, expandiendo $PORT del entorno
+CMD gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 300 --keep-alive 5
